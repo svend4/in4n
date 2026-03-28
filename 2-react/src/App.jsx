@@ -70,11 +70,19 @@ export default function App() {
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
 
   const [era,           setEra]          = useState(TIME_ERAS.length);
+  const [voronoiMode,   setVoronoiMode]  = useState(false);
   const [currentNodeId, setCurrentNodeId] = useState(GRAPH_DATA.nodes[0].id);
   const [targetNodeId,  setTargetNodeId]  = useState(null);
   const [travelPath,    setTravelPath]    = useState([GRAPH_DATA.nodes[0].id]);
   const [nodePositions, setNodePositions] = useState([]);
   const [nearNode,      setNearNode]      = useState(null);   // semantic zoom target
+
+  // V key toggles Voronoi terrain
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'v' || e.key === 'V') setVoronoiMode(m => !m); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Multiple agents (index 0 = primary/player)
   const agentsRef = useRef(
@@ -310,7 +318,7 @@ export default function App() {
         enableNodeDrag={false}
       />
 
-      <TerrainOverlay nodePositions={nodePositions} width={size.w} height={size.h} opacity={0.14} />
+      <TerrainOverlay nodePositions={nodePositions} width={size.w} height={size.h} opacity={0.14} voronoi={voronoiMode} />
 
       {/* Semantic zoom popup */}
       <SemanticZoom nearNode={nearNode} nodeDetails={NODE_DETAILS} />

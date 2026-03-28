@@ -122,6 +122,9 @@ class AquariumView extends ItemView {
   private hyperMode  = false;
   private hyperFocus = 0;
 
+  // voronoi
+  private voronoiMode = false;
+
   // ui
   private targetIdx: number|null = null;
   private statusEl!:  HTMLElement;
@@ -278,12 +281,16 @@ class AquariumView extends ItemView {
       this.camScale = Math.max(0.15, Math.min(8, this.camScale*(e.deltaY<0?1.1:0.9)));
     }, { passive:false });
 
-    // 'H' key to toggle hyper mode (when canvas is focused)
+    // Keyboard shortcuts (canvas must be focused: click it first)
     c.setAttribute('tabindex','0');
     c.addEventListener('keydown', e => {
+      if (e.key==='v'||e.key==='V') {
+        this.voronoiMode = !this.voronoiMode;
+        this.modeEl.textContent = this.voronoiMode ? 'VORONOI' : (this.hyperMode ? 'HYPER · POINCARÉ' : 'NORMAL');
+      }
       if (e.key==='h'||e.key==='H') {
         this.hyperMode = !this.hyperMode;
-        this.modeEl.textContent    = this.hyperMode ? 'HYPER · POINCARÉ' : 'NORMAL';
+        this.modeEl.textContent    = this.hyperMode ? 'HYPER · POINCARÉ' : (this.voronoiMode ? 'VORONOI' : 'NORMAL');
         this.modeEl.style.color    = this.hyperMode ? '#ce93d8' : '#4fc3f7';
         this.modeEl.style.background = this.hyperMode
           ? 'rgba(171,71,188,0.18)' : 'rgba(79,195,247,0.12)';
@@ -410,21 +417,38 @@ class AquariumView extends ItemView {
     ctx.scale(this.camScale,this.camScale);
     ctx.translate(this.camX,this.camY);
 
-    // Terrain
+    // Terrain (Delaunay triangles or Voronoi cells)
     if (this.nodes.length >= 3) {
-      const coords = this.nodes.flatMap(n=>[n.x,n.y]);
+      const pts = this.nodes.map(n => [n.x, n.y] as [number, number]);
       try {
-        const del=new Delaunator(coords), tris=del.triangles;
-        for (let i=0;i<tris.length;i+=3) {
-          const a=this.nodes[tris[i]], b=this.nodes[tris[i+1]], c=this.nodes[tris[i+2]];
-          if (!a||!b||!c) continue;
-          const hue   = ((i/tris.length)*280+30)|0;
-          const pulse = 0.1+0.04*Math.sin(this.frame*0.02+i*0.4);
-          ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.closePath();
-          ctx.fillStyle=`hsla(${hue},65%,32%,${pulse})`; ctx.fill();
-          ctx.strokeStyle=`hsla(${hue},55%,65%,0.06)`; ctx.lineWidth=0.5; ctx.stroke();
+        if (this.voronoiMode && (globalThis as any).d3?.Delaunay) {
+          // Voronoi cells
+          const xs = this.nodes.map(n=>n.x), ys = this.nodes.map(n=>n.y), pad=200;
+          const del  = (globalThis as any).d3.Delaunay.from(pts);
+          const voro = del.voronoi([Math.min(...xs)-pad,Math.min(...ys)-pad,Math.max(...xs)+pad,Math.max(...ys)+pad]);
+          this.nodes.forEach((_,i) => {
+            const hue   = ((i/this.nodes.length)*280+30)|0;
+            const pulse = 0.07+0.02*Math.sin(this.frame*0.015+i*0.8);
+            const path  = new Path2D(voro.renderCell(i));
+            ctx.fillStyle  =`hsla(${hue},58%,26%,${pulse})`;
+            ctx.strokeStyle=`hsla(${hue},65%,55%,0.28)`; ctx.lineWidth=1.5;
+            ctx.fill(path); ctx.stroke(path);
+          });
+        } else {
+          // Delaunay triangles
+          const coords = this.nodes.flatMap(n=>[n.x,n.y]);
+          const del=new Delaunator(coords), tris=del.triangles;
+          for (let i=0;i<tris.length;i+=3) {
+            const a=this.nodes[tris[i]], b=this.nodes[tris[i+1]], c=this.nodes[tris[i+2]];
+            if (!a||!b||!c) continue;
+            const hue   = ((i/tris.length)*280+30)|0;
+            const pulse = 0.1+0.04*Math.sin(this.frame*0.02+i*0.4);
+            ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.closePath();
+            ctx.fillStyle=`hsla(${hue},65%,32%,${pulse})`; ctx.fill();
+            ctx.strokeStyle=`hsla(${hue},55%,65%,0.06)`; ctx.lineWidth=0.5; ctx.stroke();
+          }
         }
-      } catch { /* skip */ }
+      } catch { /* skip degenerate geometry */ }
     }
 
     // Edges with pheromone heat
