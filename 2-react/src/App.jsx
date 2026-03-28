@@ -4,8 +4,42 @@ import * as THREE from 'three';
 import { GRAPH_DATA, GROUP_COLORS, TIME_ERAS } from './data.js';
 import InfoPanel from './components/InfoPanel.jsx';
 import TerrainOverlay from './components/TerrainOverlay.jsx';
+import SemanticZoom from './components/SemanticZoom.jsx';
 
-// ─── BFS path ─────────────────────────────────────────────────────────────────
+// ─── Link counts (for 3D relief) ─────────────────────────────────────────────
+const LINK_COUNTS = {};
+GRAPH_DATA.links.forEach(l => {
+  LINK_COUNTS[l.source] = (LINK_COUNTS[l.source] || 0) + 1;
+  LINK_COUNTS[l.target] = (LINK_COUNTS[l.target] || 0) + 1;
+});
+
+// Node descriptions for semantic zoom
+const NODE_DETAILS = new Map(GRAPH_DATA.nodes.map(n => [n.id, {
+  linkCount:   LINK_COUNTS[n.id] || 0,
+  relief:      (LINK_COUNTS[n.id] || 0) * 8,
+  description: {
+    'Время':        'Необратимое измерение бытия',
+    'Пространство': 'Протяжённость и расположение',
+    'Движение':     'Изменение положения во времени',
+    'Память':       'Хранение прошлого опыта',
+    'Смысл':        'Значение и интерпретация',
+    'Форма':        'Структура и очертание',
+    'Связь':        'Отношение между объектами',
+    'Поиск':        'Направленное движение к цели',
+    'Знание':       'Понятое и усвоенное',
+    'Вопрос':       'Открытость к неизвестному',
+    'Граница':      'Предел и различение',
+    'Путь':         'Маршрут через пространство',
+    'Слово':        'Единица языка и смысла',
+    'Образ':        'Визуальное представление',
+    'Число':        'Абстрактная величина',
+  }[n.id] || '',
+}]));
+
+// ─── Semantic zoom threshold ──────────────────────────────────────────────────
+const ZOOM_THRESHOLD = 80; // world units from camera to node center
+
+// ─── BFS ─────────────────────────────────────────────────────────────────────
 function bfsPath(links, start, end) {
   const adj = {};
   links.forEach(({ source, target }) => {
@@ -16,7 +50,7 @@ function bfsPath(links, start, end) {
   });
   if (start === end) return [start];
   const visited = new Set([start]);
-  const queue = [[start, [start]]];
+  const queue   = [[start, [start]]];
   while (queue.length) {
     const [cur, path] = queue.shift();
     for (const nb of (adj[cur] || [])) {
@@ -31,24 +65,17 @@ export default function App() {
   const fgRef = useRef();
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
 
-  // Graph state
-  const [era, setEra] = useState(TIME_ERAS.length);
+  const [era,           setEra]          = useState(TIME_ERAS.length);
   const [currentNodeId, setCurrentNodeId] = useState(GRAPH_DATA.nodes[0].id);
   const [targetNodeId,  setTargetNodeId]  = useState(null);
   const [travelPath,    setTravelPath]    = useState([GRAPH_DATA.nodes[0].id]);
   const [nodePositions, setNodePositions] = useState([]);
+  const [nearNode,      setNearNode]      = useState(null);   // semantic zoom target
 
-  // Traveler position (interpolated along current edge)
-  const travelerRef = useRef({
-    from: GRAPH_DATA.nodes[0].id,
-    to:   GRAPH_DATA.nodes[1].id,
-    t: 0,
-    mesh: null,
-    plannedPath: [],
-  });
+  const travelerRef     = useRef({ from: GRAPH_DATA.nodes[0].id, to: GRAPH_DATA.nodes[1].id, t: 0, plannedPath: [] });
   const travelerMeshRef = useRef(null);
 
-  // Filtered graph by era
+  // ── Filtered graph by era ──
   const activeGroups = TIME_ERAS[Math.min(era, TIME_ERAS.length) - 1].activeGroups;
   const filteredNodes = GRAPH_DATA.nodes.filter(n => activeGroups.includes(n.group));
   const filteredIds   = new Set(filteredNodes.map(n => n.id));
@@ -57,65 +84,73 @@ export default function App() {
     const t = typeof l.target === 'object' ? l.target.id : l.target;
     return filteredIds.has(s) && filteredIds.has(t);
   });
-  const graphData = { nodes: filteredNodes, links: filteredLinks };
 
-  // Window resize
+  // ── 3D relief: fz = link count × 8 (nodes float at different heights) ──
+  const graphData = {
+    nodes: filteredNodes.map(n => ({
+      ...n,
+      fz: (LINK_COUNTS[n.id] || 0) * 8,
+    })),
+    links: filteredLinks,
+  };
+
   useEffect(() => {
     const onResize = () => setSize({ w: window.innerWidth, h: window.innerHeight });
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Custom node object: glowing transparent sphere
+  // ── Custom node: transparent sphere + wireframe + height-based glow ──
   const nodeThreeObject = useCallback(node => {
-    const group = new THREE.Group();
+    const grp    = new THREE.Group();
+    const col    = GROUP_COLORS[node.group] || '#ffffff';
+    const relief = (LINK_COUNTS[node.id] || 0) * 8;
 
-    // Glow sphere
-    const geo  = new THREE.SphereGeometry(node.val * 0.6, 20, 20);
-    const col  = GROUP_COLORS[node.group] || '#ffffff';
-    const mat  = new THREE.MeshPhongMaterial({
-      color: col,
-      emissive: col,
-      emissiveIntensity: 0.4,
-      transparent: true,
-      opacity: 0.7,
-    });
-    group.add(new THREE.Mesh(geo, mat));
-
-    // Wireframe shell
-    const wmat = new THREE.MeshBasicMaterial({
-      color: col, wireframe: true, transparent: true, opacity: 0.15,
-    });
-    group.add(new THREE.Mesh(
-      new THREE.SphereGeometry(node.val * 0.65, 8, 8),
-      wmat
+    // Core sphere — size scales slightly with relief
+    const r = node.val * 0.6 + relief * 0.05;
+    grp.add(new THREE.Mesh(
+      new THREE.SphereGeometry(r, 20, 20),
+      new THREE.MeshPhongMaterial({
+        color: col, emissive: col, emissiveIntensity: 0.35,
+        transparent: true, opacity: 0.72,
+      })
     ));
 
-    return group;
+    // Wireframe shell
+    grp.add(new THREE.Mesh(
+      new THREE.SphereGeometry(r * 1.08, 8, 8),
+      new THREE.MeshBasicMaterial({ color: col, wireframe: true, transparent: true, opacity: 0.12 })
+    ));
+
+    // Vertical "mountain pillar" — a thin cylinder from z=0 to node's relief height
+    if (relief > 0) {
+      const pillar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.8, 1.5, relief, 6),
+        new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.18 })
+      );
+      pillar.position.set(0, 0, -relief / 2); // hang below the node
+      grp.add(pillar);
+    }
+
+    return grp;
   }, []);
 
-  // Build traveler mesh once
+  // ── Traveler mesh ──
   useEffect(() => {
     if (!fgRef.current) return;
-    const scene = fgRef.current.scene();
+    const scene = fgRef.current.scene?.();
     if (!scene) return;
-
-    const geo  = new THREE.SphereGeometry(4, 12, 12);
-    const mat  = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-    const mesh = new THREE.Mesh(geo, mat);
-
-    // glowing point light attached to traveler
-    const light = new THREE.PointLight('#4fc3f7', 2, 80);
-    mesh.add(light);
-
+    const mesh  = new THREE.Mesh(
+      new THREE.SphereGeometry(4, 12, 12),
+      new THREE.MeshBasicMaterial({ color: '#ffffff' })
+    );
+    mesh.add(new THREE.PointLight('#4fc3f7', 2, 80));
     scene.add(mesh);
     travelerMeshRef.current = mesh;
-    travelerRef.current.mesh = mesh;
-
     return () => { scene.remove(mesh); };
   }, []);
 
-  // Animate traveler each frame
+  // ── Animation: traveler + terrain projection + semantic zoom ──
   useEffect(() => {
     let raf;
     const SPEED = 0.012;
@@ -128,15 +163,13 @@ export default function App() {
 
       tr.t += SPEED;
       if (tr.t >= 1) {
-        tr.t = 0;
+        tr.t   = 0;
         tr.from = tr.to;
-
         if (tr.plannedPath.length > 1 && tr.plannedPath[0] === tr.from) {
           tr.plannedPath.shift();
           tr.to = tr.plannedPath[0];
         } else {
-          // wander along visible links
-          const neighbors = filteredLinks
+          const nbs = filteredLinks
             .filter(l => {
               const s = typeof l.source === 'object' ? l.source.id : l.source;
               const t = typeof l.target === 'object' ? l.target.id : l.target;
@@ -147,16 +180,14 @@ export default function App() {
               const t = typeof l.target === 'object' ? l.target.id : l.target;
               return s === tr.from ? t : s;
             });
-          if (neighbors.length) {
-            tr.to = neighbors[Math.floor(Math.random() * neighbors.length)];
-          }
+          if (nbs.length) tr.to = nbs[Math.floor(Math.random() * nbs.length)];
         }
         setCurrentNodeId(tr.from);
       }
 
-      // interpolate in 3D
-      const nodeA = fg.graphData().nodes.find(n => n.id === tr.from);
-      const nodeB = fg.graphData().nodes.find(n => n.id === tr.to);
+      const gd    = fg.graphData();
+      const nodeA = gd.nodes.find(n => n.id === tr.from);
+      const nodeB = gd.nodes.find(n => n.id === tr.to);
       if (nodeA && nodeB && nodeA.x !== undefined) {
         mesh.position.set(
           nodeA.x + (nodeB.x - nodeA.x) * tr.t,
@@ -165,22 +196,27 @@ export default function App() {
         );
       }
 
-      // collect projected positions for terrain overlay
-      const camera = fg.camera();
-      const renderer = fg.renderer();
-      if (camera && renderer) {
-        const projected = fg.graphData().nodes.map(n => {
+      const camera = fg.camera?.();
+      if (camera) {
+        const projected = gd.nodes.map(n => {
           if (n.x === undefined) return null;
-          const v = new THREE.Vector3(n.x, n.y, n.z ?? 0);
-          v.project(camera);
+          const world = new THREE.Vector3(n.x, n.y, n.z ?? 0);
+          const dist  = camera.position.distanceTo(world);
+          const v     = world.clone().project(camera);
           return {
-            id: n.id,
-            group: n.group,
-            px: (v.x * 0.5 + 0.5) * size.w,
-            py: (-v.y * 0.5 + 0.5) * size.h,
+            id: n.id, group: n.group,
+            px: (v.x *  0.5 + 0.5) * size.w,
+            py: (v.y * -0.5 + 0.5) * size.h,
+            distToCamera: dist,
           };
         }).filter(Boolean);
+
         setNodePositions(projected);
+
+        // Semantic zoom: find closest node to camera within threshold
+        const closest = projected.reduce((best, p) =>
+          p.distToCamera < (best?.distToCamera ?? Infinity) ? p : best, null);
+        setNearNode(closest && closest.distToCamera < ZOOM_THRESHOLD ? closest : null);
       }
 
       raf = requestAnimationFrame(tick);
@@ -190,19 +226,16 @@ export default function App() {
     return () => cancelAnimationFrame(raf);
   }, [filteredLinks, size]);
 
-  // Click: send traveler to clicked node
+  // ── Click: set traveler target + fly camera ──
   const handleNodeClick = useCallback(node => {
-    const tr = travelerRef.current;
+    const tr   = travelerRef.current;
     const path = bfsPath(filteredLinks, tr.from, node.id);
     tr.plannedPath = path;
     setTargetNodeId(node.id);
     setTravelPath(path);
-
-    // camera fly-to
     if (fgRef.current) {
-      const dist = 120;
       fgRef.current.cameraPosition(
-        { x: node.x * 1.5, y: node.y * 1.5, z: (node.z ?? 0) + dist },
+        { x: node.x * 1.4, y: node.y * 1.4, z: (node.z ?? 0) + 100 },
         node, 1500
       );
     }
@@ -219,13 +252,12 @@ export default function App() {
         width={size.w}
         height={size.h}
         backgroundColor="#070714"
-        nodeLabel="id"
+        nodeLabel={node => `${node.id} (${LINK_COUNTS[node.id] || 0} связей)`}
         nodeThreeObject={nodeThreeObject}
         nodeThreeObjectExtend={false}
         linkColor={link => {
-          const col = GROUP_COLORS[
-            (GRAPH_DATA.nodes.find(n => n.id === (typeof link.source === 'object' ? link.source.id : link.source)) || {}).group
-          ] || '#ffffff';
+          const sid = typeof link.source === 'object' ? link.source.id : link.source;
+          const col = GROUP_COLORS[(GRAPH_DATA.nodes.find(n => n.id === sid) || {}).group] || '#fff';
           return col + '88';
         }}
         linkWidth={link => (link.value || 1) * 0.5}
@@ -236,13 +268,10 @@ export default function App() {
         enableNodeDrag={false}
       />
 
-      {/* Delaunay terrain overlay */}
-      <TerrainOverlay
-        nodePositions={nodePositions}
-        width={size.w}
-        height={size.h}
-        opacity={0.15}
-      />
+      <TerrainOverlay nodePositions={nodePositions} width={size.w} height={size.h} opacity={0.14} />
+
+      {/* Semantic zoom popup */}
+      <SemanticZoom nearNode={nearNode} nodeDetails={NODE_DETAILS} />
 
       <InfoPanel
         currentNode={currentNode}
