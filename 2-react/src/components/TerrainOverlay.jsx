@@ -1,10 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Delaunator from 'delaunator';
 import { GROUP_COLORS } from '../data.js';
 
-// Renders Delaunay triangulation terrain on a 2D canvas overlay.
-// nodePositions: [{ id, x, y, group }] — updated each frame from ForceGraph3D
-export default function TerrainOverlay({ nodePositions, width, height, opacity }) {
+// Renders terrain on a 2D canvas overlay.
+// voronoi=true: organic Voronoi cells; false: Delaunay triangles (default)
+export default function TerrainOverlay({ nodePositions, width, height, opacity, voronoi = false }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -13,31 +13,50 @@ export default function TerrainOverlay({ nodePositions, width, height, opacity }
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, width, height);
 
-    // Build Delaunay from projected 2D positions
     const coords = nodePositions.flatMap(n => [n.px, n.py]);
-    let del;
-    try { del = new Delaunator(coords); } catch { return; }
 
-    const tris = del.triangles;
-    for (let i = 0; i < tris.length; i += 3) {
-      const a = nodePositions[tris[i]];
-      const b = nodePositions[tris[i + 1]];
-      const c = nodePositions[tris[i + 2]];
-      if (!a || !b || !c) continue;
-
-      // mix group colors of the three vertices
-      const colors = [a, b, c].map(n => GROUP_COLORS[n.group] || '#888');
-      const avgHue = mixHues(colors);
-
-      ctx.beginPath();
-      ctx.moveTo(a.px, a.py);
-      ctx.lineTo(b.px, b.py);
-      ctx.lineTo(c.px, c.py);
-      ctx.closePath();
-      ctx.fillStyle = avgHue;
-      ctx.fill();
+    if (voronoi && window.d3?.Delaunay) {
+      // ── Voronoi cells ──────────────────────────────────────────────────────
+      const xs  = nodePositions.map(n => n.px);
+      const ys  = nodePositions.map(n => n.py);
+      const pad = 80;
+      const del  = d3.Delaunay.from(nodePositions.map(n => [n.px, n.py]));
+      const voro = del.voronoi([
+        Math.min(...xs) - pad, Math.min(...ys) - pad,
+        Math.max(...xs) + pad, Math.max(...ys) + pad,
+      ]);
+      nodePositions.forEach((n, i) => {
+        const col  = GROUP_COLORS[n.group] || '#4fc3f7';
+        const path = new Path2D(voro.renderCell(i));
+        const [r, g, b] = hexToRgb(col);
+        ctx.fillStyle   = `rgba(${r},${g},${b},0.13)`;
+        ctx.strokeStyle = `rgba(${r},${g},${b},0.35)`;
+        ctx.lineWidth   = 1.5;
+        ctx.fill(path);
+        ctx.stroke(path);
+      });
+    } else {
+      // ── Delaunay triangles ─────────────────────────────────────────────────
+      let del;
+      try { del = new Delaunator(coords); } catch { return; }
+      const tris = del.triangles;
+      for (let i = 0; i < tris.length; i += 3) {
+        const a = nodePositions[tris[i]];
+        const b = nodePositions[tris[i + 1]];
+        const c = nodePositions[tris[i + 2]];
+        if (!a || !b || !c) continue;
+        const colors = [a, b, c].map(n => GROUP_COLORS[n.group] || '#888');
+        const avgHue = mixHues(colors);
+        ctx.beginPath();
+        ctx.moveTo(a.px, a.py);
+        ctx.lineTo(b.px, b.py);
+        ctx.lineTo(c.px, c.py);
+        ctx.closePath();
+        ctx.fillStyle = avgHue;
+        ctx.fill();
+      }
     }
-  }, [nodePositions, width, height]);
+  }, [nodePositions, width, height, voronoi]);
 
   return (
     <canvas

@@ -23,6 +23,9 @@
     .badge-normal  { background: rgba(79,195,247,.14); color:#4fc3f7; border:1px solid #4fc3f744; }
     .badge-hyper   { background: rgba(171,71,188,.2);  color:#ce93d8; border:1px solid #ab47bc88; text-shadow:0 0 8px #ab47bcaa; }
     .badge-game    { background: rgba(255,213,79,.18); color:#ffd54f; border:1px solid #ffd54f66; }
+    .badge-voronoi { background: rgba(128,203,196,.15); color:#80cbc4; border:1px solid #80cbc466; }
+    .badge-cross   { background: rgba(255,138,101,.15); color:#ff8a65; border:1px solid #ff8a6566; }
+    .badge-edit    { background: rgba(255,213,79,.22);  color:#ffd54f; border:1px solid #ffd54faa; text-shadow:0 0 8px #ffd54faa; }
     /* Score panel */
     #score-panel {
       position: fixed; top: 20px; right: 20px;
@@ -60,15 +63,19 @@
   <div id="path-line"></div>
   <div id="badges">
     <span id="badge-mode" class="badge badge-normal">NORMAL</span>
-    <span id="badge-game" class="badge badge-game" style="display:none">GAME</span>
+    <span id="badge-game"    class="badge badge-game"    style="display:none">GAME</span>
+    <span id="badge-voronoi" class="badge badge-voronoi" style="display:none">VORONOI</span>
+    <span id="badge-cross"   class="badge badge-cross"   style="display:none">CROSSWORD</span>
+    <span id="badge-edit"    class="badge badge-edit"    style="display:none">EDIT</span>
   </div>
 </div>
 
 <div id="score-panel"></div>
 <div id="choices"></div>
-<div id="hint">H – гиперб. · G – игра · Клик/цифра – выбор узла · Скролл – зум</div>
+<div id="hint">H – гиперб. · G – игра · V – ворон. · C – кросс. · E – ред. · Клик/цифра – выбор · Скролл – зум</div>
 
 <script src="https://unpkg.com/delaunator@5.0.1/delaunator.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-delaunay@6/dist/d3-delaunay.umd.min.js"></script>
 <script>
 'use strict';
 // ─── DATA ────────────────────────────────────────────────────────────────────
@@ -239,6 +246,144 @@ function projectToDisk(){
 function hyperNodeR(hx,hy){ return Math.max(5,22*(1-Math.hypot(hx,hy)*0.75)); }
 function d2s(hx,hy){ const r=diskR(); return {x:W/2+hx*r, y:H/2+hy*r}; }
 
+// ─── VORONOI MODE ────────────────────────────────────────────────────────────
+let voronoiMode = false;
+
+function drawVoronoi(positions){
+  if(!window.d3?.Delaunay) return;
+  const pts = positions.map(p=>[p.x,p.y]);
+  const del  = d3.Delaunay.from(pts);
+  // bounding box: generous world-space rectangle
+  const xs=positions.map(p=>p.x), ys=positions.map(p=>p.y);
+  const pad=200;
+  const voro = del.voronoi([
+    Math.min(...xs)-pad, Math.min(...ys)-pad,
+    Math.max(...xs)+pad, Math.max(...ys)+pad
+  ]);
+  NODES.forEach((n,i)=>{
+    const hue   = CAT_HUE[n.cat];
+    const pulse = 0.08 + 0.025*Math.sin(frame*0.015+i*0.8);
+    const path  = new Path2D(voro.renderCell(i));
+    ctx.fillStyle   = `hsla(${hue},58%,26%,${pulse})`;
+    ctx.strokeStyle = `hsla(${hue},65%,55%,0.3)`;
+    ctx.lineWidth   = 1.5;
+    ctx.fill(path);
+    ctx.stroke(path);
+  });
+}
+
+// ─── CROSSWORD MODE ──────────────────────────────────────────────────────────
+let crosswordMode = false;
+
+const CROSS_WORDS = EDGES.map(([a,b])=>{
+  const pool=['и','в','из','к','от','по','за','при','над','нет','как','да','же','ли','бы'];
+  return pool[(a*7+b*3)%pool.length];
+});
+
+function drawCrossword(positions){
+  const BOX=11, GAP=1;
+  EDGES.forEach(([a,b],ei)=>{
+    const pa=positions[a], pb=positions[b];
+    const word=CROSS_WORDS[ei];
+    const dx=pb.x-pa.x, dy=pb.y-pa.y;
+    const angle=Math.atan2(dy,dx);
+    const ph=combinedPheromone(ei);
+    const hue=200-ph*160;
+    const totalW=word.length*(BOX+GAP);
+
+    ctx.save();
+    ctx.translate((pa.x+pb.x)/2,(pa.y+pb.y)/2);
+    ctx.rotate(angle);
+
+    word.split('').forEach((ch,k)=>{
+      const x=-totalW/2+k*(BOX+GAP);
+      ctx.fillStyle=`hsla(${hue},40%,11%,0.85)`;
+      ctx.strokeStyle=`hsla(${hue},70%,55%,${0.3+ph*0.55})`;
+      ctx.lineWidth=0.8;
+      ctx.beginPath(); ctx.rect(x,-BOX/2,BOX,BOX); ctx.fill(); ctx.stroke();
+      ctx.fillStyle=`hsla(${hue},70%,82%,${0.5+ph*0.45})`;
+      ctx.font=`bold ${BOX-2}px monospace`;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(ch.toUpperCase(), x+BOX/2, 0);
+    });
+    ctx.restore();
+  });
+}
+
+// ─── NODE EDITOR ─────────────────────────────────────────────────────────────
+let editMode      = false;
+let editSelected  = null;   // node index selected as edge source
+let editMouseWorld= {x:0,y:0};
+let nodeIdCounter = NODES.length;
+
+function editorAddNode(wx,wy){
+  const id=nodeIdCounter++;
+  NODES.push({id, label:`Узел${id}`, cat:id%4});
+  state.push({x:wx,y:wy,vx:0,vy:0});
+  adj.push([]);
+  CROSS_WORDS.length=EDGES.length; // keep in sync
+  agents.forEach(ag=>{
+    const np=new Float32Array(EDGES.length).fill(0.03);
+    np.set(ag.pheromones.slice(0,EDGES.length)); ag.pheromones=np;
+  });
+}
+
+function editorAddEdge(a,b){
+  if(a===b) return;
+  if(EDGES.some(([x,y])=>(x===a&&y===b)||(x===b&&y===a))) return;
+  EDGES.push([a,b]);
+  adj[a].push(b); adj[b].push(a);
+  const word=['и','в','из','к','от','по'][(a*7+b*3)%6];
+  CROSS_WORDS.push(word);
+  agents.forEach(ag=>{
+    const np=new Float32Array(EDGES.length).fill(0.03);
+    np.set(ag.pheromones); ag.pheromones=np;
+  });
+}
+
+function editorRemoveNode(idx){
+  for(let i=EDGES.length-1;i>=0;i--){
+    if(EDGES[i][0]===idx||EDGES[i][1]===idx){ EDGES.splice(i,1); CROSS_WORDS.splice(i,1); }
+  }
+  NODES.splice(idx,1); state.splice(idx,1); adj.splice(idx,1);
+  adj.forEach(list=>{
+    for(let k=list.length-1;k>=0;k--){
+      if(list[k]===idx) list.splice(k,1); else if(list[k]>idx) list[k]--;
+    }
+  });
+  EDGES.forEach(e=>{ if(e[0]>idx)e[0]--; if(e[1]>idx)e[1]--; });
+  NODES.forEach((n,i)=>{n.id=i;});
+  agents.forEach(ag=>{
+    if(ag.from>=NODES.length) ag.from=0;
+    if(ag.to>=NODES.length||!adj[ag.from].includes(ag.to)) ag.to=adj[ag.from]?.[0]??0;
+    ag.pheromones=new Float32Array(EDGES.length).fill(0.03);
+  });
+  if(editSelected===idx||editSelected>=NODES.length) editSelected=null;
+}
+
+function drawEditOverlay(positions){
+  // orange border while in edit mode
+  ctx.save();
+  ctx.strokeStyle='rgba(255,200,80,0.12)'; ctx.lineWidth=6;
+  ctx.strokeRect(0,0,W,H);
+  ctx.restore();
+
+  if(editSelected===null) return;
+  const from=positions[editSelected];
+  // pending edge dashed line to mouse
+  ctx.save();
+  ctx.setLineDash([7,4]);
+  ctx.strokeStyle='rgba(255,210,80,0.65)'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(from.x,from.y); ctx.lineTo(editMouseWorld.x,editMouseWorld.y); ctx.stroke();
+  ctx.restore();
+  // glow ring around selected node
+  ctx.save();
+  ctx.shadowColor='#ffd54f'; ctx.shadowBlur=20;
+  ctx.strokeStyle='#ffd54f'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(from.x,from.y,26+3*Math.sin(frame*0.1),0,Math.PI*2); ctx.stroke();
+  ctx.restore();
+}
+
 // ─── INTERACTION ─────────────────────────────────────────────────────────────
 let isDragging=false, dragStart={x:0,y:0}, camStart={x:0,y:0};
 
@@ -259,13 +404,31 @@ function hitTest(sx,sy){
 
 canvas.addEventListener('mousedown', e=>{
   const hit=hitTest(e.clientX,e.clientY);
+
+  if(editMode){
+    if(hit!==null){
+      if(editSelected===null){
+        editSelected=hit; // first click: select source node
+      } else if(editSelected!==hit){
+        editorAddEdge(editSelected,hit); // second click: add edge
+        editSelected=null;
+      } else {
+        editSelected=null; // click same node: deselect
+      }
+    } else {
+      // click empty space: add new node
+      const w=toWorld(e.clientX,e.clientY);
+      editorAddNode(w.x,w.y);
+      editSelected=null;
+    }
+    return;
+  }
+
   if(hit!==null){
     if(gameMode){
-      // in game mode, click = choose next node if adjacent
-      if(adj[agents[0].from].includes(hit) && agents[0].waitingForChoice) playerChoose(hit);
+      if(adj[agents[0].from].includes(hit)&&agents[0].waitingForChoice) playerChoose(hit);
     } else {
-      // send player agent toward clicked node
-      agents[0].plannedPath=bfsPath(agents[0].from, hit);
+      agents[0].plannedPath=bfsPath(agents[0].from,hit);
       hyperFocus=hit;
     }
     document.getElementById('current-node').textContent=NODES[hit].label;
@@ -273,7 +436,18 @@ canvas.addEventListener('mousedown', e=>{
     isDragging=true; dragStart={x:e.clientX,y:e.clientY}; camStart={x:cam.x,y:cam.y};
   }
 });
+canvas.addEventListener('contextmenu', e=>{
+  e.preventDefault();
+  if(!editMode) return;
+  const hit=hitTest(e.clientX,e.clientY);
+  if(hit!==null) editorRemoveNode(hit);
+});
 canvas.addEventListener('mousemove', e=>{
+  if(editMode){
+    editMouseWorld = hyperMode
+      ? (() => { const R=diskR(); return {x:(e.clientX-W/2)/R*200, y:(e.clientY-H/2)/R*200}; })()
+      : toWorld(e.clientX,e.clientY);
+  }
   if(!isDragging) return;
   cam.x=camStart.x+(e.clientX-dragStart.x)/cam.scale;
   cam.y=camStart.y+(e.clientY-dragStart.y)/cam.scale;
@@ -297,6 +471,21 @@ window.addEventListener('keydown', e=>{
     if(gameMode){ newTarget(); agents[0].waitingForChoice=false; }
     else { choicesDiv.innerHTML=''; gameTarget=null; }
   }
+  if(e.key==='v'||e.key==='V'){
+    voronoiMode=!voronoiMode;
+    document.getElementById('badge-voronoi').style.display=voronoiMode?'inline-block':'none';
+  }
+  if(e.key==='c'||e.key==='C'){
+    crosswordMode=!crosswordMode;
+    document.getElementById('badge-cross').style.display=crosswordMode?'inline-block':'none';
+  }
+  if(e.key==='e'||e.key==='E'){
+    editMode=!editMode;
+    editSelected=null;
+    document.getElementById('badge-edit').style.display=editMode?'inline-block':'none';
+    canvas.style.cursor=editMode?'cell':'crosshair';
+  }
+  if(e.key==='Escape'){ editSelected=null; }
   // digit keys for choice
   const k=parseInt(e.key);
   if(gameMode && agents[0].waitingForChoice && !isNaN(k) && k>=1){
@@ -511,10 +700,13 @@ function drawNormal(){
 
   ctx.save();
   ctx.translate(W/2,H/2); ctx.scale(cam.scale,cam.scale); ctx.translate(cam.x,cam.y);
-  drawTerrain(state);
-  drawEdges(state);
+  if(voronoiMode) drawVoronoi(state);
+  else            drawTerrain(state);
+  if(crosswordMode) drawCrossword(state);
+  else              drawEdges(state);
   agents.forEach(ag=>drawAgent(ag,state,null));
   drawNodes(state, null);
+  if(editMode) drawEditOverlay(state);
   ctx.restore();
 }
 
@@ -529,8 +721,10 @@ function drawHyper(){
   ctx.save(); ctx.beginPath(); ctx.arc(W/2,H/2,R-1,0,Math.PI*2); ctx.clip();
 
   const screen=disk.map(p=>d2s(p.x,p.y));
-  drawTerrain(screen);
-  drawEdges(screen);
+  if(voronoiMode) drawVoronoi(screen);
+  else            drawTerrain(screen);
+  if(crosswordMode) drawCrossword(screen);
+  else              drawEdges(screen);
 
   // agent trails projected
   const maxR=Math.max(...state.map(s=>Math.hypot(s.x,s.y)))||1, sc=0.93/maxR;
@@ -564,6 +758,7 @@ function drawHyper(){
   });
 
   drawNodes(screen, (i,pos)=>hyperNodeR(disk[i].x,disk[i].y));
+  if(editMode) drawEditOverlay(screen);
   ctx.restore();
 }
 
