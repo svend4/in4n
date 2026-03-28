@@ -1,0 +1,10 @@
+{
+  "id": "info-aquarium",
+  "name": "InfoAquarium",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Dynamic graph visualization: travel through your notes as through a transparent glass ant farm. Nodes = notes, edges = links, Delaunay triangles = terrain.",
+  "author": "InfoAquarium",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}

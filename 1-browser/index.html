@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InfoAquarium — Prototype</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #070714; overflow: hidden; font-family: monospace; color: #fff; }
+    canvas { display: block; cursor: crosshair; }
+    #ui {
+      position: fixed; top: 20px; left: 20px;
+      pointer-events: none;
+    }
+    #title { font-size: 11px; letter-spacing: 3px; opacity: 0.35; text-transform: uppercase; }
+    #current-node {
+      margin-top: 8px; font-size: 20px; font-weight: bold;
+      color: #4fc3f7; text-shadow: 0 0 20px #4fc3f7aa;
+      min-height: 28px;
+    }
+    #current-edge {
+      margin-top: 4px; font-size: 11px; opacity: 0.5; color: #aaa;
+    }
+    #legend {
+      position: fixed; top: 20px; right: 20px;
+      font-size: 10px; opacity: 0.4; text-align: right;
+      pointer-events: none; line-height: 1.8;
+    }
+    #hint {
+      position: fixed; bottom: 20px; left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px; opacity: 0.3; letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div id="title">InfoAquarium v0.1</div>
+  <div id="current-node"></div>
+  <div id="current-edge"></div>
+</div>
+<div id="legend">
+  Колесо мыши — зум<br>
+  Клик на узел — цель<br>
+  Перетащить — панорама
+</div>
+<div id="hint">Информационный аквариум · путешествие по смыслу</div>
+
+<script src="https://unpkg.com/delaunator@5.0.1/delaunator.min.js"></script>
+<script>
+// ─── DATA ────────────────────────────────────────────────────────────────────
+const NODES = [
+  { id: 0, label: 'Время',         category: 0 },
+  { id: 1, label: 'Пространство',  category: 1 },
+  { id: 2, label: 'Движение',      category: 1 },
+  { id: 3, label: 'Память',        category: 2 },
+  { id: 4, label: 'Смысл',         category: 2 },
+  { id: 5, label: 'Форма',         category: 3 },
+  { id: 6, label: 'Связь',         category: 3 },
+  { id: 7, label: 'Поиск',         category: 0 },
+  { id: 8, label: 'Знание',        category: 2 },
+  { id: 9, label: 'Вопрос',        category: 0 },
+  { id:10, label: 'Граница',       category: 3 },
+  { id:11, label: 'Путь',          category: 1 },
+];
+
+const EDGES = [
+  [0,1],[0,2],[0,3],[0,7],[0,9],
+  [1,2],[1,5],[1,10],[1,11],
+  [2,4],[2,6],[2,11],
+  [3,4],[3,8],[3,9],
+  [4,5],[4,7],[4,8],
+  [5,6],[5,10],
+  [6,7],[6,8],[6,11],
+  [7,9],[8,9],[9,10],[10,11],[3,11],[0,8],
+];
+
+// Hue per category (rainbow terrain)
+const CAT_COLORS = [
+  [300, 70, 30],  // фиолетовый — время
+  [200, 80, 28],  // синий — пространство
+  [140, 70, 25],  // зелёный — память/смысл
+  [30,  80, 28],  // оранжевый — форма
+];
+
+// ─── CANVAS + CONTEXT ────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ─── CAMERA ──────────────────────────────────────────────────────────────────
+const cam = { x: 0, y: 0, scale: 1 };
+
+// ─── PHYSICS ─────────────────────────────────────────────────────────────────
+const REPULSION   = 4500;
+const SPRING_K    = 0.04;
+const SPRING_LEN  = 160;
+const DAMPING     = 0.88;
+const CENTER_PULL = 0.003;
+
+// init positions in circle
+const state = NODES.map((n, i) => {
+  const angle = (i / NODES.length) * Math.PI * 2;
+  const r = 200;
+  return {
+    x:  Math.cos(angle) * r,
+    y:  Math.sin(angle) * r,
+    vx: 0, vy: 0,
+  };
+});
+
+// adjacency
+const adj = Array.from({ length: NODES.length }, () => []);
+EDGES.forEach(([a, b]) => { adj[a].push(b); adj[b].push(a); });
+
+function physicsStep() {
+  const n = state.length;
+
+  // repulsion between all pairs
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const dx = state[j].x - state[i].x;
+      const dy = state[j].y - state[i].y;
+      const dist2 = dx * dx + dy * dy + 1;
+      const dist  = Math.sqrt(dist2);
+      const force = REPULSION / dist2;
+      const fx = force * dx / dist;
+      const fy = force * dy / dist;
+      state[i].vx -= fx;
+      state[i].vy -= fy;
+      state[j].vx += fx;
+      state[j].vy += fy;
+    }
+  }
+
+  // spring attraction along edges
+  EDGES.forEach(([a, b]) => {
+    const dx = state[b].x - state[a].x;
+    const dy = state[b].y - state[a].y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const stretch = (dist - SPRING_LEN) * SPRING_K;
+    const fx = stretch * dx / dist;
+    const fy = stretch * dy / dist;
+    state[a].vx += fx;
+    state[a].vy += fy;
+    state[b].vx -= fx;
+    state[b].vy -= fy;
+  });
+
+  // centering + damping + integrate
+  for (let i = 0; i < n; i++) {
+    state[i].vx = (state[i].vx - state[i].x * CENTER_PULL) * DAMPING;
+    state[i].vy = (state[i].vy - state[i].y * CENTER_PULL) * DAMPING;
+    state[i].x += state[i].vx;
+    state[i].y += state[i].vy;
+  }
+}
+
+// ─── DELAUNAY TERRAIN ────────────────────────────────────────────────────────
+function buildTerrain() {
+  const coords = state.flatMap(s => [s.x, s.y]);
+  return new Delaunator(coords);
+}
+
+// pick triangle fill based on centroid's category neighbors
+function triangleHue(a, b, c) {
+  const cat = (NODES[a].category + NODES[b].category + NODES[c].category) / 3;
+  // smooth hue from 0..360 based on mixed category 0..3
+  const hue = (cat / 3) * 280 + 30;
+  return hue;
+}
+
+// ─── TRAVELER ────────────────────────────────────────────────────────────────
+const traveler = {
+  from: 0,
+  to:   adj[0][0],
+  t:    0,        // 0..1 progress along edge
+  speed: 0.008,
+  target: null,   // user-requested destination
+  trail: [],      // last N positions for tail effect
+  x: state[0].x,
+  y: state[0].y,
+};
+
+// BFS path finding
+function bfsPath(start, end) {
+  if (start === end) return [start];
+  const visited = new Set([start]);
+  const queue = [[start, [start]]];
+  while (queue.length) {
+    const [cur, path] = queue.shift();
+    for (const nb of adj[cur]) {
+      if (nb === end) return [...path, nb];
+      if (!visited.has(nb)) {
+        visited.add(nb);
+        queue.push([nb, [...path, nb]]);
+      }
+    }
+  }
+  return [start]; // no path
+}
+
+let plannedPath = [];
+
+function stepTraveler() {
+  traveler.t += traveler.speed;
+
+  if (traveler.t >= 1) {
+    traveler.t = 0;
+    traveler.from = traveler.to;
+
+    // follow planned path
+    if (plannedPath.length > 1 && plannedPath[0] === traveler.from) {
+      plannedPath.shift();
+      traveler.to = plannedPath[0];
+    } else {
+      // wander: pick random neighbor
+      const options = adj[traveler.from];
+      traveler.to = options[Math.floor(Math.random() * options.length)];
+    }
+  }
+
+  // interpolate position
+  const a = state[traveler.from];
+  const b = state[traveler.to];
+  traveler.x = a.x + (b.x - a.x) * traveler.t;
+  traveler.y = a.y + (b.y - a.y) * traveler.t;
+
+  // trail
+  traveler.trail.push({ x: traveler.x, y: traveler.y });
+  if (traveler.trail.length > 40) traveler.trail.shift();
+}
+
+// ─── INTERACTION ─────────────────────────────────────────────────────────────
+const NODE_R = 18;
+
+// world ↔ screen transforms
+function toScreen(wx, wy) {
+  return {
+    x: (wx + cam.x) * cam.scale + W / 2,
+    y: (wy + cam.y) * cam.scale + H / 2,
+  };
+}
+function toWorld(sx, sy) {
+  return {
+    x: (sx - W / 2) / cam.scale - cam.x,
+    y: (sy - H / 2) / cam.scale - cam.y,
+  };
+}
+
+// mouse state
+let isDragging = false;
+let dragStart = { x: 0, y: 0 };
+let camStart  = { x: 0, y: 0 };
+
+canvas.addEventListener('mousedown', e => {
+  // check node click
+  const w = toWorld(e.clientX, e.clientY);
+  let clicked = null;
+  let minDist = NODE_R / cam.scale + 5;
+  state.forEach((s, i) => {
+    const d = Math.hypot(s.x - w.x, s.y - w.y);
+    if (d < minDist) { minDist = d; clicked = i; }
+  });
+
+  if (clicked !== null) {
+    plannedPath = bfsPath(traveler.from, clicked);
+    document.getElementById('current-node').textContent = NODES[clicked].label;
+    document.getElementById('current-edge').textContent =
+      '→ ' + plannedPath.map(i => NODES[i].label).join(' → ');
+  } else {
+    isDragging = true;
+    dragStart  = { x: e.clientX, y: e.clientY };
+    camStart   = { x: cam.x, y: cam.y };
+  }
+});
+canvas.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  cam.x = camStart.x + (e.clientX - dragStart.x) / cam.scale;
+  cam.y = camStart.y + (e.clientY - dragStart.y) / cam.scale;
+});
+canvas.addEventListener('mouseup', () => { isDragging = false; });
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.1 : 0.9;
+  cam.scale = Math.max(0.2, Math.min(5, cam.scale * factor));
+}, { passive: false });
+
+// ─── RENDER ──────────────────────────────────────────────────────────────────
+let frame = 0;
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  // background grid (depth cue)
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  ctx.lineWidth = 1;
+  const step = 80 * cam.scale;
+  const ox = ((cam.x * cam.scale + W / 2) % step + step) % step;
+  const oy = ((cam.y * cam.scale + H / 2) % step + step) % step;
+  for (let x = ox; x < W; x += step) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = oy; y < H; y += step) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(cam.scale, cam.scale);
+  ctx.translate(cam.x, cam.y);
+
+  // ── Delaunay terrain (triangles) ──
+  const del = buildTerrain();
+  const tris = del.triangles;
+
+  for (let i = 0; i < tris.length; i += 3) {
+    const a = tris[i], b = tris[i + 1], c = tris[i + 2];
+    const sa = state[a], sb = state[b], sc = state[c];
+
+    // pulsing opacity
+    const pulse = 0.12 + 0.04 * Math.sin(frame * 0.02 + i * 0.3);
+    const hue   = triangleHue(a, b, c);
+
+    ctx.beginPath();
+    ctx.moveTo(sa.x, sa.y);
+    ctx.lineTo(sb.x, sb.y);
+    ctx.lineTo(sc.x, sc.y);
+    ctx.closePath();
+
+    // gradient fill using triangle centroid hue
+    ctx.fillStyle = `hsla(${hue}, 70%, 35%, ${pulse})`;
+    ctx.fill();
+
+    // wireframe edges (faint)
+    ctx.strokeStyle = `hsla(${hue}, 60%, 70%, 0.08)`;
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+  }
+
+  // ── Graph edges ──
+  EDGES.forEach(([a, b]) => {
+    const sa = state[a], sb = state[b];
+    const hueA = CAT_COLORS[NODES[a].category][0];
+    const hueB = CAT_COLORS[NODES[b].category][0];
+    const avgHue = (hueA + hueB) / 2;
+
+    // glow pass
+    ctx.save();
+    ctx.shadowColor = `hsl(${avgHue}, 80%, 60%)`;
+    ctx.shadowBlur  = 8;
+    ctx.strokeStyle = `hsla(${avgHue}, 70%, 60%, 0.35)`;
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(sa.x, sa.y);
+    ctx.lineTo(sb.x, sb.y);
+    ctx.stroke();
+    ctx.restore();
+  });
+
+  // ── Traveler trail ──
+  if (traveler.trail.length > 1) {
+    ctx.save();
+    for (let i = 1; i < traveler.trail.length; i++) {
+      const alpha = (i / traveler.trail.length) * 0.7;
+      const size  = (i / traveler.trail.length) * 4;
+      ctx.beginPath();
+      ctx.arc(traveler.trail[i].x, traveler.trail[i].y, size, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(100, 220, 255, ${alpha})`;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // ── Nodes ──
+  state.forEach((s, i) => {
+    const [h, sat, l] = CAT_COLORS[NODES[i].category];
+    const isTarget   = plannedPath.length > 0 && plannedPath[plannedPath.length - 1] === i;
+    const isCurrent  = traveler.from === i;
+
+    // outer glow
+    const glowR = isTarget ? NODE_R * 2.5 : isCurrent ? NODE_R * 2 : NODE_R * 1.4;
+    const grad  = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, glowR);
+    grad.addColorStop(0, `hsla(${h}, ${sat}%, ${l + 30}%, 0.5)`);
+    grad.addColorStop(1, `hsla(${h}, ${sat}%, ${l}%, 0)`);
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, glowR, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // core sphere
+    ctx.save();
+    ctx.shadowColor = `hsl(${h}, ${sat}%, 70%)`;
+    ctx.shadowBlur  = isTarget ? 25 : 12;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, NODE_R, 0, Math.PI * 2);
+    ctx.fillStyle = `hsla(${h}, ${sat}%, ${l + 15}%, 0.85)`;
+    ctx.fill();
+
+    // ring for target
+    if (isTarget) {
+      ctx.strokeStyle = `hsl(${h}, 90%, 80%)`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // label
+    ctx.fillStyle = `hsla(${h}, 60%, 85%, 0.9)`;
+    ctx.font = `${isCurrent ? 'bold ' : ''}11px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(NODES[i].label, s.x, s.y + NODE_R + 12);
+  });
+
+  // ── Traveler (the "ant") ──
+  ctx.save();
+  ctx.shadowColor = '#4fc3f7';
+  ctx.shadowBlur  = 20;
+  const pulse = 5 + 2 * Math.sin(frame * 0.15);
+  ctx.beginPath();
+  ctx.arc(traveler.x, traveler.y, pulse, 0, Math.PI * 2);
+
+  const grad2 = ctx.createRadialGradient(
+    traveler.x, traveler.y, 0,
+    traveler.x, traveler.y, pulse
+  );
+  grad2.addColorStop(0, 'rgba(255,255,255,1)');
+  grad2.addColorStop(0.4, 'rgba(100,220,255,0.9)');
+  grad2.addColorStop(1, 'rgba(50,100,255,0)');
+  ctx.fillStyle = grad2;
+  ctx.fill();
+  ctx.restore();
+
+  ctx.restore();
+
+  // live node label (top-left)
+  if (traveler.t < 0.05) {
+    document.getElementById('current-node').textContent = NODES[traveler.from].label;
+    if (plannedPath.length <= 1) {
+      document.getElementById('current-edge').textContent =
+        '⟶ ' + NODES[traveler.to].label;
+    }
+  }
+
+  frame++;
+}
+
+// ─── LOOP ────────────────────────────────────────────────────────────────────
+function loop() {
+  physicsStep();
+  stepTraveler();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
