@@ -4,12 +4,14 @@ import Delaunator from 'delaunator';
 
 const VIEW_TYPE = 'info-aquarium';
 
-const CAT_PALETTE: Record<string, string> = {
-  default: '#4fc3f7',
-  current: '#ffd54f',
-  target:  '#c792ea',
-  focus:   '#ff6b9d',
-};
+const NODE_COLORS = ['#4fc3f7', '#ffd54f', '#c792ea'];
+
+const AGENT_DEFS = [
+  { color: '#4fc3f7', speed: 0.010 },
+  { color: '#ff6b9d', speed: 0.007 },
+  { color: '#c792ea', speed: 0.009 },
+  { color: '#80cbc4', speed: 0.006 },
+];
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface NodeState {
@@ -82,6 +84,18 @@ function hyperNodeR(hx: number, hy: number): number {
   return Math.max(5, 22*(1-Math.hypot(hx,hy)*0.75));
 }
 
+interface Agent {
+  color:     string;
+  speed:     number;
+  from:      number;
+  to:        number;
+  t:         number;
+  trail:     { x: number; y: number }[];
+  pheromones: Float32Array;
+  plannedPath: number[];
+  score:     number;
+}
+
 // ─── AquariumView ─────────────────────────────────────────────────────────────
 class AquariumView extends ItemView {
   private canvas!: HTMLCanvasElement;
@@ -97,12 +111,10 @@ class AquariumView extends ItemView {
   private dragStart  = {x:0,y:0};
   private camStart   = {x:0,y:0};
 
-  // traveler
-  private traveler = { from:0, to:1, t:0, plannedPath:[] as number[] };
-  private trail:    { x:number; y:number }[] = [];
+  // agents
+  private agents: Agent[] = [];
 
-  // pheromones
-  private pheromones: Float32Array = new Float32Array(0);
+  // pheromone helpers
   private readonly EVAP    = 0.997;
   private readonly DEPOSIT = 0.28;
 
@@ -114,6 +126,7 @@ class AquariumView extends ItemView {
   private targetIdx: number|null = null;
   private statusEl!:  HTMLElement;
   private modeEl!:    HTMLElement;
+  private agentHudEl!: HTMLElement;
   private frame = 0;
 
   getViewType()   { return VIEW_TYPE; }
@@ -139,6 +152,11 @@ class AquariumView extends ItemView {
       background:rgba(79,195,247,0.12); color:#4fc3f7;
       border:1px solid #4fc3f744;`;
     this.modeEl.textContent = 'NORMAL';
+
+    this.agentHudEl = containerEl.createEl('div');
+    this.agentHudEl.style.cssText = `
+      position:absolute; top:12px; right:14px; z-index:10; pointer-events:none;
+      font-family:monospace; font-size:10px; line-height:1.8; text-align:right;`;
 
     const hint = containerEl.createEl('div');
     hint.style.cssText = `
@@ -191,13 +209,23 @@ class AquariumView extends ItemView {
 
     if (this.nodes.length < 3) this.loadDemo();
 
-    this.pheromones = new Float32Array(this.edges.length).fill(0.05);
+    // Init agents
+    this.agents = AGENT_DEFS.map((def, i) => {
+      const startNode = (i * 3) % this.nodes.length;
+      const neighbors = this.adj.get(startNode) || [];
+      return {
+        ...def,
+        from:        startNode,
+        to:          neighbors[0] ?? 0,
+        t:           Math.random(),
+        trail:       [],
+        pheromones:  new Float32Array(this.edges.length).fill(0.03),
+        plannedPath: [],
+        score:       0,
+      };
+    });
 
-    if (this.nodes.length > 1) {
-      this.traveler.from = 0;
-      this.traveler.to   = this.adj.get(0)?.[0] ?? 1;
-      this.hyperFocus    = 0;
-    }
+    this.hyperFocus = 0;
   }
 
   private loadDemo() {
@@ -229,7 +257,7 @@ class AquariumView extends ItemView {
         : this.hitTestNormal(e.offsetX, e.offsetY);
 
       if (hit !== null) {
-        this.traveler.plannedPath = bfs(this.adj, this.traveler.from, hit);
+        this.agents[0].plannedPath = bfs(this.adj, this.agents[0].from, hit);
         this.targetIdx  = hit;
         this.hyperFocus = hit;
         this.statusEl.textContent = '→ ' + this.nodes[hit].label;
@@ -296,46 +324,70 @@ class AquariumView extends ItemView {
   private loop() {
     this.raf = requestAnimationFrame(() => this.loop());
     physicsStep(this.nodes, this.edges);
-    this.stepTraveler();
-    this.evaporate();
+    this.stepAgents();
     this.draw();
     this.frame++;
   }
 
   private evaporate() {
-    for (let i = 0; i < this.pheromones.length; i++)
-      this.pheromones[i] = Math.max(0.02, this.pheromones[i]*this.EVAP);
+    this.agents.forEach(ag => {
+      for (let i = 0; i < ag.pheromones.length; i++)
+        ag.pheromones[i] = Math.max(0.02, ag.pheromones[i] * this.EVAP);
+    });
   }
 
-  private depositPheromone(from: number, to: number) {
+  private depositPheromone(ag: Agent, from: number, to: number) {
     const idx = this.edges.findIndex(([a,b])=>(a===from&&b===to)||(a===to&&b===from));
-    if (idx>=0) this.pheromones[idx] = Math.min(1, this.pheromones[idx]+this.DEPOSIT);
+    if (idx >= 0) ag.pheromones[idx] = Math.min(1, ag.pheromones[idx] + this.DEPOSIT);
   }
 
-  private stepTraveler() {
-    const tr = this.traveler;
-    if (this.nodes.length < 2) return;
-    tr.t += 0.01;
-    if (tr.t >= 1) {
-      this.depositPheromone(tr.from, tr.to);
-      tr.t    = 0;
-      tr.from = tr.to;
-      this.hyperFocus = tr.from;
+  // Combined pheromone for edge rendering (sum across agents, capped)
+  private combinedPheromone(ei: number): number {
+    return Math.min(1, this.agents.reduce((s, ag) => s + (ag.pheromones[ei] ?? 0), 0));
+  }
 
-      if (tr.plannedPath.length>1 && tr.plannedPath[0]===tr.from) {
-        tr.plannedPath.shift();
-        tr.to = tr.plannedPath[0];
-      } else {
-        const nbs = this.adj.get(tr.from)||[];
-        tr.to = nbs.length ? nbs[Math.floor(Math.random()*nbs.length)] : tr.from;
+  private stepAgents() {
+    this.evaporate();
+    this.agents.forEach((ag, ai) => {
+      ag.t += ag.speed;
+      if (ag.t >= 1) {
+        this.depositPheromone(ag, ag.from, ag.to);
+        ag.t    = 0;
+        ag.from = ag.to;
+        if (ai === 0) {
+          this.hyperFocus = ag.from;
+          this.statusEl.textContent = this.nodes[ag.from]?.label ?? '';
+        }
+
+        if (ag.plannedPath.length > 1 && ag.plannedPath[0] === ag.from) {
+          ag.plannedPath.shift();
+          ag.to = ag.plannedPath[0];
+        } else {
+          // ACO: choose next node by pheromone bias
+          const nbs = this.adj.get(ag.from) || [];
+          if (!nbs.length) return;
+          const scores = nbs.map(nb => {
+            const idx = this.edges.findIndex(([a,b])=>(a===ag.from&&b===nb)||(a===nb&&b===ag.from));
+            return Math.pow(ag.pheromones[idx] ?? 0.03, 2) + 0.1;
+          });
+          const total = scores.reduce((s, x) => s + x, 0);
+          let r = Math.random() * total, chosen = nbs[0];
+          for (let k = 0; k < nbs.length; k++) { r -= scores[k]; if (r <= 0) { chosen = nbs[k]; break; } }
+          ag.to = chosen;
+        }
       }
-      if (tr.plannedPath.length<=1) this.statusEl.textContent = this.nodes[tr.from]?.label??'';
-    }
-    const a = this.nodes[tr.from], b = this.nodes[tr.to];
-    if (a&&b) {
-      this.trail.push({ x:a.x+(b.x-a.x)*tr.t, y:a.y+(b.y-a.y)*tr.t });
-      if (this.trail.length>45) this.trail.shift();
-    }
+
+      const a = this.nodes[ag.from], b = this.nodes[ag.to];
+      if (a && b) {
+        ag.trail.push({ x: a.x+(b.x-a.x)*ag.t, y: a.y+(b.y-a.y)*ag.t });
+        if (ag.trail.length > 35) ag.trail.shift();
+      }
+    });
+
+    // Update agent HUD
+    this.agentHudEl.innerHTML = this.agents.map(ag =>
+      `<span style="color:${ag.color}">${ag.color === this.agents[0].color ? '◆' : '◇'}</span> `
+    ).join('');
   }
 
   // ── Draw ──────────────────────────────────────────────────────────────────
@@ -345,13 +397,8 @@ class AquariumView extends ItemView {
   }
 
   private edgeStyle(ei: number) {
-    const ph   = this.pheromones[ei] ?? 0.02;
-    return {
-      hue:   200 - ph*180,
-      alpha: 0.18 + ph*0.68,
-      width: 0.8 + ph*4,
-      blur:  4 + ph*14,
-    };
+    const ph = this.combinedPheromone(ei);
+    return { hue: 200-ph*180, alpha: 0.18+ph*0.68, width: 0.8+ph*4, blur: 4+ph*14 };
   }
 
   private drawNormal() {
@@ -392,45 +439,46 @@ class AquariumView extends ItemView {
       ctx.restore();
     });
 
-    // Trail
-    this.trail.forEach((pt,i) => {
-      const al=(i/this.trail.length)*0.7;
-      ctx.beginPath(); ctx.arc(pt.x,pt.y,(i/this.trail.length)*4,0,Math.PI*2);
-      ctx.fillStyle=`rgba(100,220,255,${al})`; ctx.fill();
-    });
+    // Agents: trails + bodies
+    this.agents.forEach(ag => this.drawAgent(ag, this.nodes));
 
     // Nodes
     this.nodes.forEach((n,i) => {
       const isTarget  = this.targetIdx===i;
-      const isCurrent = this.traveler.from===i;
-      const r = Math.max(10,10+n.links*1.5);
-      const color = isCurrent ? CAT_PALETTE.current : isTarget ? CAT_PALETTE.target : CAT_PALETTE.default;
-
+      const isCurrent = this.agents[0].from===i;
+      const r = Math.max(10, 10+n.links*1.5);
+      const color = isCurrent ? '#ffd54f' : isTarget ? '#c792ea' : '#4fc3f7';
       const grd=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,r*2.2);
       grd.addColorStop(0,color+'aa'); grd.addColorStop(1,color+'00');
       ctx.beginPath(); ctx.arc(n.x,n.y,r*2.2,0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
-
-      ctx.save();
-      ctx.shadowColor=color; ctx.shadowBlur=isTarget?22:10;
+      ctx.save(); ctx.shadowColor=color; ctx.shadowBlur=isTarget?22:10;
       ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2); ctx.fillStyle=color+'cc'; ctx.fill();
       ctx.restore();
-
       ctx.fillStyle='rgba(220,235,255,0.82)';
       ctx.font=`${isCurrent?'bold ':''}10px monospace`;
       ctx.textAlign='center'; ctx.fillText(n.label,n.x,n.y+r+11);
     });
+    ctx.restore();
+  }
 
-    // Traveler
-    const tr=this.traveler, a=this.nodes[tr.from], b=this.nodes[tr.to];
-    if (a&&b) {
-      const tx=a.x+(b.x-a.x)*tr.t, ty=a.y+(b.y-a.y)*tr.t;
-      const pr=5+2*Math.sin(this.frame*0.15);
-      ctx.save(); ctx.shadowColor='#fff'; ctx.shadowBlur=18;
-      const grd2=ctx.createRadialGradient(tx,ty,0,tx,ty,pr);
-      grd2.addColorStop(0,'rgba(255,255,255,1)'); grd2.addColorStop(0.5,'rgba(100,200,255,0.8)'); grd2.addColorStop(1,'rgba(50,100,255,0)');
-      ctx.beginPath(); ctx.arc(tx,ty,pr,0,Math.PI*2); ctx.fillStyle=grd2; ctx.fill();
-      ctx.restore();
-    }
+  private drawAgent(ag: Agent, positions: { x:number; y:number }[]) {
+    const ctx = this.ctx;
+    ag.trail.forEach((pt,i) => {
+      const al=(i/ag.trail.length)*0.6, sz=(i/ag.trail.length)*3.5;
+      ctx.beginPath(); ctx.arc(pt.x,pt.y,sz,0,Math.PI*2);
+      const alpha=Math.round(al*255).toString(16).padStart(2,'0');
+      ctx.fillStyle=ag.color+alpha; ctx.fill();
+    });
+    const pa=positions[ag.from], pb=positions[ag.to];
+    if (!pa||!pb) return;
+    const tx=pa.x+(pb.x-pa.x)*ag.t, ty=pa.y+(pb.y-pa.y)*ag.t;
+    const pr=5+2*Math.sin(this.frame*0.15+ag.from);
+    ctx.save(); ctx.shadowColor=ag.color; ctx.shadowBlur=18;
+    const grd=ctx.createRadialGradient(tx,ty,0,tx,ty,pr);
+    grd.addColorStop(0,'rgba(255,255,255,1)');
+    grd.addColorStop(0.4,ag.color+'dd');
+    grd.addColorStop(1,ag.color+'00');
+    ctx.beginPath(); ctx.arc(tx,ty,pr,0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
     ctx.restore();
   }
 
@@ -484,33 +532,47 @@ class AquariumView extends ItemView {
       ctx.restore();
     });
 
-    // Trail (projected)
+    // Agents: projected trails + bodies
     const maxR2=Math.max(...this.nodes.map(n=>Math.hypot(n.x,n.y)))||1, sc2=0.93/maxR2;
     const fa   = { x:this.nodes[this.hyperFocus].x*sc2, y:this.nodes[this.hyperFocus].y*sc2 };
-    this.trail.forEach((pt,i) => {
-      const mp=mobius(pt.x*sc2,pt.y*sc2,fa.x,fa.y), sp=d2s(mp.x,mp.y);
-      const al=(i/this.trail.length)*0.65, sz=(i/this.trail.length)*3.5;
-      ctx.beginPath(); ctx.arc(sp.x,sp.y,sz,0,Math.PI*2);
-      ctx.fillStyle=`rgba(100,220,255,${al})`; ctx.fill();
+    const norm2 = this.nodes.map(n=>({x:n.x*sc2,y:n.y*sc2}));
+
+    this.agents.forEach(ag => {
+      // projected trail
+      ag.trail.forEach((pt,i) => {
+        const mp=mobius(pt.x*sc2,pt.y*sc2,fa.x,fa.y), sp=d2s(mp.x,mp.y);
+        const al=(i/ag.trail.length)*0.6, sz=(i/ag.trail.length)*3.5;
+        const alpha=Math.round(al*255).toString(16).padStart(2,'0');
+        ctx.beginPath(); ctx.arc(sp.x,sp.y,sz,0,Math.PI*2);
+        ctx.fillStyle=ag.color+alpha; ctx.fill();
+      });
+      // projected body
+      const ta=norm2[ag.from], tb=norm2[ag.to];
+      const ti={x:ta.x+(tb.x-ta.x)*ag.t, y:ta.y+(tb.y-ta.y)*ag.t};
+      const tMob=mobius(ti.x,ti.y,fa.x,fa.y), tSp=d2s(tMob.x,tMob.y);
+      const pr=5+2*Math.sin(this.frame*0.15+ag.from);
+      ctx.save(); ctx.shadowColor=ag.color; ctx.shadowBlur=18;
+      const grd3=ctx.createRadialGradient(tSp.x,tSp.y,0,tSp.x,tSp.y,pr);
+      grd3.addColorStop(0,'rgba(255,255,255,1)'); grd3.addColorStop(0.4,ag.color+'dd'); grd3.addColorStop(1,ag.color+'00');
+      ctx.beginPath(); ctx.arc(tSp.x,tSp.y,pr,0,Math.PI*2); ctx.fillStyle=grd3; ctx.fill();
+      ctx.restore();
     });
 
     // Nodes
     disk.forEach((p,i) => {
       const isTarget  = this.targetIdx===i;
-      const isCurrent = this.traveler.from===i;
+      const isCurrent = this.agents[0].from===i;
       const isFocus   = this.hyperFocus===i;
       const sp        = d2s(p.x,p.y);
       const nr        = hyperNodeR(p.x,p.y);
-      const color     = isCurrent ? CAT_PALETTE.current : isFocus ? CAT_PALETTE.focus : isTarget ? CAT_PALETTE.target : CAT_PALETTE.default;
+      const color     = isCurrent ? '#ffd54f' : isFocus ? '#ff6b9d' : isTarget ? '#c792ea' : '#4fc3f7';
 
       const grd=ctx.createRadialGradient(sp.x,sp.y,0,sp.x,sp.y,nr*(isFocus?2.8:1.8));
       grd.addColorStop(0,color+(isFocus?'bb':'77')); grd.addColorStop(1,color+'00');
       ctx.beginPath(); ctx.arc(sp.x,sp.y,nr*(isFocus?2.8:1.8),0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
 
-      ctx.save();
-      ctx.shadowColor=color; ctx.shadowBlur=isFocus?30:12;
-      ctx.beginPath(); ctx.arc(sp.x,sp.y,nr,0,Math.PI*2);
-      ctx.fillStyle=color+'cc'; ctx.fill();
+      ctx.save(); ctx.shadowColor=color; ctx.shadowBlur=isFocus?30:12;
+      ctx.beginPath(); ctx.arc(sp.x,sp.y,nr,0,Math.PI*2); ctx.fillStyle=color+'cc'; ctx.fill();
       if (isTarget||isFocus) { ctx.strokeStyle=color; ctx.lineWidth=isFocus?2.5:1.5; ctx.stroke(); }
       ctx.restore();
 
@@ -520,19 +582,6 @@ class AquariumView extends ItemView {
         ctx.textAlign='center'; ctx.fillText(this.nodes[i].label,sp.x,sp.y+nr+10);
       }
     });
-
-    // Traveler
-    const tr=this.traveler;
-    const norm2=this.nodes.map(n=>({x:n.x*sc2,y:n.y*sc2}));
-    const ta=norm2[tr.from], tb=norm2[tr.to];
-    const ti={x:ta.x+(tb.x-ta.x)*tr.t, y:ta.y+(tb.y-ta.y)*tr.t};
-    const tMob=mobius(ti.x,ti.y,fa.x,fa.y), tSp=d2s(tMob.x,tMob.y);
-    const pr=5+2*Math.sin(this.frame*0.15);
-    ctx.save(); ctx.shadowColor='#fff'; ctx.shadowBlur=22;
-    const grd3=ctx.createRadialGradient(tSp.x,tSp.y,0,tSp.x,tSp.y,pr);
-    grd3.addColorStop(0,'rgba(255,255,255,1)'); grd3.addColorStop(0.5,'rgba(100,200,255,0.8)'); grd3.addColorStop(1,'rgba(50,100,255,0)');
-    ctx.beginPath(); ctx.arc(tSp.x,tSp.y,pr,0,Math.PI*2); ctx.fillStyle=grd3; ctx.fill();
-    ctx.restore();
 
     ctx.restore(); // end clip
   }

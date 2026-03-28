@@ -5,6 +5,10 @@ import { GRAPH_DATA, GROUP_COLORS, TIME_ERAS } from './data.js';
 import InfoPanel from './components/InfoPanel.jsx';
 import TerrainOverlay from './components/TerrainOverlay.jsx';
 import SemanticZoom from './components/SemanticZoom.jsx';
+import AgentHUD from './components/AgentHUD.jsx';
+import { useAudio } from './hooks/useAudio.js';
+
+const AGENT_COLORS = ['#4fc3f7','#ff6b9d','#c792ea','#80cbc4','#ffd54f'];
 
 // ─── Link counts (for 3D relief) ─────────────────────────────────────────────
 const LINK_COUNTS = {};
@@ -72,8 +76,24 @@ export default function App() {
   const [nodePositions, setNodePositions] = useState([]);
   const [nearNode,      setNearNode]      = useState(null);   // semantic zoom target
 
-  const travelerRef     = useRef({ from: GRAPH_DATA.nodes[0].id, to: GRAPH_DATA.nodes[1].id, t: 0, plannedPath: [] });
+  // Multiple agents (index 0 = primary/player)
+  const agentsRef = useRef(
+    AGENT_COLORS.map((color, i) => ({
+      color,
+      from:  GRAPH_DATA.nodes[(i * 3) % GRAPH_DATA.nodes.length].id,
+      to:    GRAPH_DATA.nodes[(i * 3 + 1) % GRAPH_DATA.nodes.length].id,
+      t:     Math.random(),
+      plannedPath: [],
+      score: 0,
+      speed: 0.008 + i * 0.002,
+    }))
+  );
+  const travelerRef     = useRef(agentsRef.current[0]); // alias for compat
   const travelerMeshRef = useRef(null);
+  const agentMeshesRef  = useRef([]);
+  const [agentScores, setAgentScores] = useState(AGENT_COLORS.map(() => 0));
+
+  const { playArrival, playScore } = useAudio();
 
   // ── Filtered graph by era ──
   const activeGroups = TIME_ERAS[Math.min(era, TIME_ERAS.length) - 1].activeGroups;
@@ -135,67 +155,87 @@ export default function App() {
     return grp;
   }, []);
 
-  // ── Traveler mesh ──
+  // ── Agent meshes (one per agent) ──
   useEffect(() => {
     if (!fgRef.current) return;
     const scene = fgRef.current.scene?.();
     if (!scene) return;
-    const mesh  = new THREE.Mesh(
-      new THREE.SphereGeometry(4, 12, 12),
-      new THREE.MeshBasicMaterial({ color: '#ffffff' })
-    );
-    mesh.add(new THREE.PointLight('#4fc3f7', 2, 80));
-    scene.add(mesh);
-    travelerMeshRef.current = mesh;
-    return () => { scene.remove(mesh); };
+
+    const meshes = AGENT_COLORS.map((col, i) => {
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(i === 0 ? 5 : 3.5, 10, 10),
+        new THREE.MeshBasicMaterial({ color: col })
+      );
+      mesh.add(new THREE.PointLight(col, i === 0 ? 2 : 1, 60));
+      scene.add(mesh);
+      return mesh;
+    });
+
+    agentMeshesRef.current = meshes;
+    travelerMeshRef.current = meshes[0];
+    return () => { meshes.forEach(m => scene.remove(m)); };
   }, []);
 
-  // ── Animation: traveler + terrain projection + semantic zoom ──
+  // ── Animation: all agents + terrain + semantic zoom ──
   useEffect(() => {
     let raf;
-    const SPEED = 0.012;
+
+    function getNeighbors(nodeId) {
+      return filteredLinks
+        .map(l => {
+          const s = typeof l.source === 'object' ? l.source.id : l.source;
+          const t = typeof l.target === 'object' ? l.target.id : l.target;
+          if (s === nodeId) return t;
+          if (t === nodeId) return s;
+          return null;
+        })
+        .filter(Boolean);
+    }
 
     function tick() {
-      const tr   = travelerRef.current;
-      const mesh = travelerMeshRef.current;
-      const fg   = fgRef.current;
-      if (!mesh || !fg) { raf = requestAnimationFrame(tick); return; }
+      const fg = fgRef.current;
+      if (!fg) { raf = requestAnimationFrame(tick); return; }
 
-      tr.t += SPEED;
-      if (tr.t >= 1) {
-        tr.t   = 0;
-        tr.from = tr.to;
-        if (tr.plannedPath.length > 1 && tr.plannedPath[0] === tr.from) {
-          tr.plannedPath.shift();
-          tr.to = tr.plannedPath[0];
-        } else {
-          const nbs = filteredLinks
-            .filter(l => {
-              const s = typeof l.source === 'object' ? l.source.id : l.source;
-              const t = typeof l.target === 'object' ? l.target.id : l.target;
-              return s === tr.from || t === tr.from;
-            })
-            .map(l => {
-              const s = typeof l.source === 'object' ? l.source.id : l.source;
-              const t = typeof l.target === 'object' ? l.target.id : l.target;
-              return s === tr.from ? t : s;
-            });
-          if (nbs.length) tr.to = nbs[Math.floor(Math.random() * nbs.length)];
+      const gd = fg.graphData();
+
+      agentsRef.current.forEach((ag, ai) => {
+        const mesh = agentMeshesRef.current[ai];
+        ag.t += ag.speed;
+
+        if (ag.t >= 1) {
+          ag.t    = 0;
+          ag.from = ag.to;
+
+          // Sound on arrival (primary agent only, to avoid noise)
+          if (ai === 0) {
+            const arrivedNode = GRAPH_DATA.nodes.find(n => n.id === ag.from);
+            if (arrivedNode) playArrival(arrivedNode.group);
+            setCurrentNodeId(ag.from);
+          }
+
+          if (ag.plannedPath.length > 1 && ag.plannedPath[0] === ag.from) {
+            ag.plannedPath.shift();
+            ag.to = ag.plannedPath[0];
+          } else {
+            const nbs = getNeighbors(ag.from);
+            if (nbs.length) ag.to = nbs[Math.floor(Math.random() * nbs.length)];
+          }
         }
-        setCurrentNodeId(tr.from);
-      }
 
-      const gd    = fg.graphData();
-      const nodeA = gd.nodes.find(n => n.id === tr.from);
-      const nodeB = gd.nodes.find(n => n.id === tr.to);
-      if (nodeA && nodeB && nodeA.x !== undefined) {
-        mesh.position.set(
-          nodeA.x + (nodeB.x - nodeA.x) * tr.t,
-          nodeA.y + (nodeB.y - nodeA.y) * tr.t,
-          nodeA.z + (nodeB.z - nodeA.z) * tr.t,
-        );
-      }
+        if (mesh) {
+          const nodeA = gd.nodes.find(n => n.id === ag.from);
+          const nodeB = gd.nodes.find(n => n.id === ag.to);
+          if (nodeA && nodeB && nodeA.x !== undefined) {
+            mesh.position.set(
+              nodeA.x + (nodeB.x - nodeA.x) * ag.t,
+              nodeA.y + (nodeB.y - nodeA.y) * ag.t,
+              nodeA.z + (nodeB.z - nodeA.z) * ag.t,
+            );
+          }
+        }
+      });
 
+      // Terrain + semantic zoom (based on primary agent camera)
       const camera = fg.camera?.();
       if (camera) {
         const projected = gd.nodes.map(n => {
@@ -212,8 +252,6 @@ export default function App() {
         }).filter(Boolean);
 
         setNodePositions(projected);
-
-        // Semantic zoom: find closest node to camera within threshold
         const closest = projected.reduce((best, p) =>
           p.distToCamera < (best?.distToCamera ?? Infinity) ? p : best, null);
         setNearNode(closest && closest.distToCamera < ZOOM_THRESHOLD ? closest : null);
@@ -224,11 +262,11 @@ export default function App() {
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [filteredLinks, size]);
+  }, [filteredLinks, size, playArrival]);
 
-  // ── Click: set traveler target + fly camera ──
+  // ── Click: set primary agent target + fly camera ──
   const handleNodeClick = useCallback(node => {
-    const tr   = travelerRef.current;
+    const tr   = agentsRef.current[0];
     const path = bfsPath(filteredLinks, tr.from, node.id);
     tr.plannedPath = path;
     setTargetNodeId(node.id);
@@ -243,6 +281,10 @@ export default function App() {
 
   const currentNode = GRAPH_DATA.nodes.find(n => n.id === currentNodeId);
   const targetNode  = GRAPH_DATA.nodes.find(n => n.id === targetNodeId);
+  const agentHudData = AGENT_COLORS.map((color, i) => ({
+    color,
+    score: agentScores[i] || 0,
+  }));
 
   return (
     <div style={{ position: 'relative', width: size.w, height: size.h }}>
@@ -272,6 +314,9 @@ export default function App() {
 
       {/* Semantic zoom popup */}
       <SemanticZoom nearNode={nearNode} nodeDetails={NODE_DETAILS} />
+
+      {/* Agent HUD */}
+      <AgentHUD agents={agentHudData} gameMode={false} gameTarget={targetNodeId} currentNodeId={currentNodeId} />
 
       <InfoPanel
         currentNode={currentNode}

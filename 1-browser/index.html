@@ -9,66 +9,83 @@
     body { background: #070714; overflow: hidden; font-family: monospace; color: #fff; }
     canvas { display: block; cursor: crosshair; }
     #ui { position: fixed; top: 20px; left: 20px; pointer-events: none; }
-    #title { font-size: 11px; letter-spacing: 3px; opacity: 0.35; text-transform: uppercase; }
+    #title { font-size: 10px; letter-spacing: 3px; opacity: 0.3; text-transform: uppercase; }
     #current-node {
-      margin-top: 8px; font-size: 20px; font-weight: bold;
-      color: #4fc3f7; text-shadow: 0 0 20px #4fc3f7aa; min-height: 28px;
+      margin-top: 6px; font-size: 20px; font-weight: bold;
+      color: #4fc3f7; text-shadow: 0 0 20px #4fc3f7aa; min-height: 26px;
     }
-    #current-edge { margin-top: 4px; font-size: 11px; opacity: 0.5; color: #aaa; }
-    #mode-badge {
-      margin-top: 10px; display: inline-block;
-      padding: 3px 10px; border-radius: 12px; font-size: 10px; letter-spacing: 2px;
+    #path-line { margin-top: 3px; font-size: 10px; opacity: 0.45; color: #aaa; }
+    #badges { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    .badge {
+      padding: 2px 9px; border-radius: 10px; font-size: 9px; letter-spacing: 1.5px;
       transition: all 0.3s;
     }
-    #mode-badge.normal { background: rgba(79,195,247,0.15); color: #4fc3f7; border: 1px solid #4fc3f755; }
-    #mode-badge.hyper  { background: rgba(171,71,188,0.2);  color: #ce93d8; border: 1px solid #ab47bc88;
-                         text-shadow: 0 0 10px #ab47bcaa; }
-    #legend {
+    .badge-normal  { background: rgba(79,195,247,.14); color:#4fc3f7; border:1px solid #4fc3f744; }
+    .badge-hyper   { background: rgba(171,71,188,.2);  color:#ce93d8; border:1px solid #ab47bc88; text-shadow:0 0 8px #ab47bcaa; }
+    .badge-game    { background: rgba(255,213,79,.18); color:#ffd54f; border:1px solid #ffd54f66; }
+    /* Score panel */
+    #score-panel {
       position: fixed; top: 20px; right: 20px;
-      font-size: 10px; opacity: 0.35; text-align: right;
-      pointer-events: none; line-height: 2;
+      font-size: 11px; text-align: right; pointer-events: none;
+      line-height: 2;
     }
+    #score-panel .score-row { display: flex; align-items: center; gap: 6px; justify-content: flex-end; margin-bottom: 2px; }
+    #score-panel .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    /* Game choice overlay */
+    #choices {
+      position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 10px; pointer-events: all;
+    }
+    .choice-btn {
+      background: rgba(7,7,20,0.88); border: 1px solid #4fc3f766;
+      color: #4fc3f7; font-family: monospace; font-size: 12px;
+      padding: 6px 14px; border-radius: 8px; cursor: pointer;
+      transition: all 0.15s;
+    }
+    .choice-btn:hover { background: rgba(79,195,247,.2); border-color: #4fc3f7bb; }
+    .choice-btn .key { opacity: 0.5; font-size: 9px; margin-right: 4px; }
     #hint {
-      position: fixed; bottom: 20px; left: 50%;
+      position: fixed; bottom: 18px; left: 50%;
       transform: translateX(-50%);
-      font-size: 11px; opacity: 0.25; letter-spacing: 1px;
+      font-size: 10px; opacity: 0.22; letter-spacing: 1px; pointer-events: none;
     }
   </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+
 <div id="ui">
-  <div id="title">InfoAquarium v0.2</div>
+  <div id="title">InfoAquarium v0.3</div>
   <div id="current-node"></div>
-  <div id="current-edge"></div>
-  <div id="mode-badge" class="normal">NORMAL</div>
+  <div id="path-line"></div>
+  <div id="badges">
+    <span id="badge-mode" class="badge badge-normal">NORMAL</span>
+    <span id="badge-game" class="badge badge-game" style="display:none">GAME</span>
+  </div>
 </div>
-<div id="legend">
-  H — переключить режим<br>
-  Клик на узел — цель<br>
-  Перетащить — панорама<br>
-  Колесо — зум
-</div>
-<div id="hint">Информационный аквариум · H = гиперболический режим</div>
+
+<div id="score-panel"></div>
+<div id="choices"></div>
+<div id="hint">H – гиперб. · G – игра · Клик/цифра – выбор узла · Скролл – зум</div>
 
 <script src="https://unpkg.com/delaunator@5.0.1/delaunator.min.js"></script>
 <script>
+'use strict';
 // ─── DATA ────────────────────────────────────────────────────────────────────
 const NODES = [
-  { id: 0, label: 'Время',         category: 0 },
-  { id: 1, label: 'Пространство',  category: 1 },
-  { id: 2, label: 'Движение',      category: 1 },
-  { id: 3, label: 'Память',        category: 2 },
-  { id: 4, label: 'Смысл',         category: 2 },
-  { id: 5, label: 'Форма',         category: 3 },
-  { id: 6, label: 'Связь',         category: 3 },
-  { id: 7, label: 'Поиск',         category: 0 },
-  { id: 8, label: 'Знание',        category: 2 },
-  { id: 9, label: 'Вопрос',        category: 0 },
-  { id:10, label: 'Граница',       category: 3 },
-  { id:11, label: 'Путь',          category: 1 },
+  { id:0,  label:'Время',         cat:0 },
+  { id:1,  label:'Пространство',  cat:1 },
+  { id:2,  label:'Движение',      cat:1 },
+  { id:3,  label:'Память',        cat:2 },
+  { id:4,  label:'Смысл',         cat:2 },
+  { id:5,  label:'Форма',         cat:3 },
+  { id:6,  label:'Связь',         cat:3 },
+  { id:7,  label:'Поиск',         cat:0 },
+  { id:8,  label:'Знание',        cat:2 },
+  { id:9,  label:'Вопрос',        cat:0 },
+  { id:10, label:'Граница',       cat:3 },
+  { id:11, label:'Путь',          cat:1 },
 ];
-
 const EDGES = [
   [0,1],[0,2],[0,3],[0,7],[0,9],
   [1,2],[1,5],[1,10],[1,11],
@@ -79,494 +96,522 @@ const EDGES = [
   [6,7],[6,8],[6,11],
   [7,9],[8,9],[9,10],[10,11],[3,11],[0,8],
 ];
-
-const CAT_COLORS = [
-  [300, 70, 30],
-  [200, 80, 28],
-  [140, 70, 25],
-  [30,  80, 28],
-];
+const CAT_HUE = [300, 200, 140, 30];
+const adj = Array.from({length:NODES.length}, ()=>[]);
+EDGES.forEach(([a,b])=>{ adj[a].push(b); adj[b].push(a); });
 
 // ─── CANVAS ──────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
 let W, H;
-function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+function resize(){ W=canvas.width=window.innerWidth; H=canvas.height=window.innerHeight; }
 window.addEventListener('resize', resize);
 resize();
 
-// ─── CAMERA (normal mode) ────────────────────────────────────────────────────
-const cam = { x: 0, y: 0, scale: 1 };
-let diskR = () => Math.min(W, H) * 0.44; // hyper mode disk radius
-
 // ─── PHYSICS ─────────────────────────────────────────────────────────────────
-const REPULSION = 4500, SPRING_K = 0.04, SPRING_LEN = 160, DAMPING = 0.88, CENTER_PULL = 0.003;
-
-const state = NODES.map((n, i) => {
-  const a = (i / NODES.length) * Math.PI * 2;
-  return { x: Math.cos(a) * 200, y: Math.sin(a) * 200, vx: 0, vy: 0 };
+const state = NODES.map((_,i)=>{
+  const a=(i/NODES.length)*Math.PI*2;
+  return { x:Math.cos(a)*200, y:Math.sin(a)*200, vx:0, vy:0 };
 });
-
-const adj = Array.from({ length: NODES.length }, () => []);
-EDGES.forEach(([a, b]) => { adj[a].push(b); adj[b].push(a); });
-
-function physicsStep() {
-  const n = state.length;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const dx = state[j].x - state[i].x, dy = state[j].y - state[i].y;
-      const d2 = dx*dx + dy*dy + 1, d = Math.sqrt(d2);
-      const f  = REPULSION / d2;
-      const fx = f*dx/d, fy = f*dy/d;
-      state[i].vx -= fx; state[i].vy -= fy;
-      state[j].vx += fx; state[j].vy += fy;
-    }
+function physicsStep(){
+  const n=state.length;
+  for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+    const dx=state[j].x-state[i].x, dy=state[j].y-state[i].y;
+    const d2=dx*dx+dy*dy+1, d=Math.sqrt(d2), f=4500/d2;
+    const fx=f*dx/d, fy=f*dy/d;
+    state[i].vx-=fx; state[i].vy-=fy; state[j].vx+=fx; state[j].vy+=fy;
   }
-  EDGES.forEach(([a, b]) => {
-    const dx = state[b].x - state[a].x, dy = state[b].y - state[a].y;
-    const d  = Math.sqrt(dx*dx + dy*dy) || 1;
-    const s  = (d - SPRING_LEN) * SPRING_K;
-    const fx = s*dx/d, fy = s*dy/d;
-    state[a].vx += fx; state[a].vy += fy;
-    state[b].vx -= fx; state[b].vy -= fy;
+  EDGES.forEach(([a,b])=>{
+    const dx=state[b].x-state[a].x, dy=state[b].y-state[a].y;
+    const d=Math.sqrt(dx*dx+dy*dy)||1, s=(d-160)*0.04;
+    const fx=s*dx/d, fy=s*dy/d;
+    state[a].vx+=fx; state[a].vy+=fy; state[b].vx-=fx; state[b].vy-=fy;
   });
-  for (let i = 0; i < n; i++) {
-    state[i].vx = (state[i].vx - state[i].x * CENTER_PULL) * DAMPING;
-    state[i].vy = (state[i].vy - state[i].y * CENTER_PULL) * DAMPING;
-    state[i].x += state[i].vx;
-    state[i].y += state[i].vy;
+  for(let i=0;i<n;i++){
+    state[i].vx=(state[i].vx-state[i].x*0.003)*0.88;
+    state[i].vy=(state[i].vy-state[i].y*0.003)*0.88;
+    state[i].x+=state[i].vx; state[i].y+=state[i].vy;
   }
 }
 
-// ─── PHEROMONES (ACO) ────────────────────────────────────────────────────────
-const pheromones  = new Float32Array(EDGES.length).fill(0.05);
-const EVAP        = 0.997;   // per frame evaporation factor
-const DEPOSIT     = 0.30;    // added when traveler crosses edge
-const PHERO_MIN   = 0.02;
-
-function evaporatePheromones() {
-  for (let i = 0; i < pheromones.length; i++) {
-    pheromones[i] = Math.max(PHERO_MIN, pheromones[i] * EVAP);
-  }
-}
-
-function depositPheromone(from, to) {
-  const idx = EDGES.findIndex(([a, b]) => (a===from&&b===to)||(a===to&&b===from));
-  if (idx >= 0) pheromones[idx] = Math.min(1, pheromones[idx] + DEPOSIT);
-}
-
-// ─── HYPERBOLIC (Poincaré disk) ──────────────────────────────────────────────
-let hyperMode  = false;
-let hyperFocus = 0;   // index of node at center of disk
-
-// Möbius transform: move point `a` to origin of unit disk
-// T_a(z) = (z - a) / (1 - conj(a)·z)
-function mobius(px, py, ax, ay) {
-  const nr = px - ax, ni = py - ay;
-  const dr = 1 - (ax*px + ay*py);
-  const di = -(ax*py - ay*px);
-  const d2 = dr*dr + di*di + 1e-12;
-  return { x: (nr*dr + ni*di)/d2, y: (ni*dr - nr*di)/d2 };
-}
-
-// Project all node positions into unit disk (normalized) + apply Möbius focus
-function projectToDisk() {
-  // Step 1: normalize to unit disk
-  const maxR = Math.max(...state.map(s => Math.hypot(s.x, s.y))) || 1;
-  const scale = 0.93 / maxR;
-  const norm = state.map(s => ({ x: s.x * scale, y: s.y * scale }));
-
-  // Step 2: Möbius transform — move focus node to center
-  const fa = norm[hyperFocus];
-  return norm.map(p => mobius(p.x, p.y, fa.x, fa.y));
-}
-
-// Disk coordinate to screen
-function d2s(hx, hy) {
-  const r = diskR();
-  return { x: W/2 + hx*r, y: H/2 + hy*r };
-}
-
-// Node display radius in hyper mode (larger at center, smaller at edge)
-function hyperNodeR(hx, hy) {
-  const r = Math.hypot(hx, hy);
-  return Math.max(5, 22 * (1 - r * 0.75));
-}
-
-// ─── DELAUNAY ────────────────────────────────────────────────────────────────
-function triangleHue(a, b, c) {
-  return ((NODES[a].category + NODES[b].category + NODES[c].category) / 3 / 3) * 280 + 30;
-}
-
-// ─── TRAVELER ────────────────────────────────────────────────────────────────
-const traveler = { from: 0, to: adj[0][0], t: 0, trail: [] };
-let plannedPath = [];
-
-function bfsPath(start, end) {
-  if (start === end) return [start];
-  const visited = new Set([start]);
-  const queue   = [[start, [start]]];
-  while (queue.length) {
-    const [cur, path] = queue.shift();
-    for (const nb of adj[cur]) {
-      if (nb === end) return [...path, nb];
-      if (!visited.has(nb)) { visited.add(nb); queue.push([nb, [...path, nb]]); }
+// ─── BFS ─────────────────────────────────────────────────────────────────────
+function bfsPath(start, end){
+  if(start===end) return [start];
+  const vis=new Set([start]), q=[[start,[start]]];
+  while(q.length){
+    const [cur,p]=q.shift();
+    for(const nb of adj[cur]){
+      if(nb===end) return [...p,nb];
+      if(!vis.has(nb)){vis.add(nb);q.push([nb,[...p,nb]]);}
     }
   }
   return [start];
 }
 
-function stepTraveler() {
-  traveler.t += 0.008;
-  if (traveler.t >= 1) {
-    depositPheromone(traveler.from, traveler.to);
-    traveler.t    = 0;
-    traveler.from = traveler.to;
-    hyperFocus    = traveler.from; // hyper disk follows traveler
+// ─── AGENTS ──────────────────────────────────────────────────────────────────
+// Agent 0 is the player (in game mode), others are auto-bots
+const AGENT_DEFS = [
+  { color:'#4fc3f7', name:'Ты',      speed:0.009 },
+  { color:'#ff6b9d', name:'Αlpha',   speed:0.007 },
+  { color:'#c792ea', name:'Βeta',    speed:0.008 },
+  { color:'#80cbc4', name:'Γamma',   speed:0.006 },
+  { color:'#ffd54f', name:'Δelta',   speed:0.010 },
+];
 
-    if (plannedPath.length > 1 && plannedPath[0] === traveler.from) {
-      plannedPath.shift();
-      traveler.to = plannedPath[0];
-    } else {
-      traveler.to = adj[traveler.from][Math.floor(Math.random() * adj[traveler.from].length)];
-    }
-  }
+const agents = AGENT_DEFS.map((def,i)=>({
+  ...def,
+  from: (i*3) % NODES.length,
+  to:   adj[(i*3)%NODES.length][0],
+  t:    Math.random(),
+  trail:[],
+  pheromones: new Float32Array(EDGES.length).fill(0.03),
+  plannedPath:[],
+  score: 0,
+  waitingForChoice: false,   // only for player agent in game mode
+}));
 
-  const a = state[traveler.from], b = state[traveler.to];
-  const tx = a.x + (b.x - a.x) * traveler.t;
-  const ty = a.y + (b.y - a.y) * traveler.t;
-  traveler.trail.push({ x: tx, y: ty });
-  if (traveler.trail.length > 45) traveler.trail.shift();
+// ─── PHEROMONES ───────────────────────────────────────────────────────────────
+function evaporate(){
+  agents.forEach(ag=>{
+    for(let i=0;i<ag.pheromones.length;i++)
+      ag.pheromones[i]=Math.max(0.02, ag.pheromones[i]*0.997);
+  });
 }
+function deposit(ag, from, to){
+  const idx=EDGES.findIndex(([a,b])=>(a===from&&b===to)||(a===to&&b===from));
+  if(idx>=0) ag.pheromones[idx]=Math.min(1, ag.pheromones[idx]+0.28);
+}
+
+// ─── GAME MODE ───────────────────────────────────────────────────────────────
+let gameMode   = false;
+let gameTarget = null;    // index of current target node
+let choicesDiv = document.getElementById('choices');
+let totalFrames = 0;
+
+function newTarget(){
+  let t;
+  do { t = Math.floor(Math.random()*NODES.length); }
+  while(t===agents[0].from);
+  gameTarget = t;
+}
+
+function renderChoices(){
+  choicesDiv.innerHTML = '';
+  if(!gameMode || !agents[0].waitingForChoice) return;
+  const options = adj[agents[0].from];
+  options.forEach((ni,k)=>{
+    const btn = document.createElement('button');
+    btn.className = 'choice-btn';
+    btn.innerHTML = `<span class="key">${k+1}</span>${NODES[ni].label}`;
+    btn.onclick = ()=>{ playerChoose(ni); };
+    choicesDiv.appendChild(btn);
+  });
+}
+
+function playerChoose(nodeIdx){
+  const ag = agents[0];
+  if(!ag.waitingForChoice) return;
+  ag.to = nodeIdx;
+  ag.t  = 0;
+  ag.waitingForChoice = false;
+  choicesDiv.innerHTML = '';
+}
+
+// ─── HYPER MODE ──────────────────────────────────────────────────────────────
+let hyperMode  = false;
+let hyperFocus = 0;
+const cam = { x:0, y:0, scale:1 };
+
+function mobius(px,py,ax,ay){
+  const nr=px-ax, ni=py-ay;
+  const dr=1-(ax*px+ay*py), di=-(ax*py-ay*px);
+  const d2=dr*dr+di*di+1e-12;
+  return { x:(nr*dr+ni*di)/d2, y:(ni*dr-nr*di)/d2 };
+}
+function diskR(){ return Math.min(W,H)*0.44*cam.scale; }
+function projectToDisk(){
+  const maxR=Math.max(...state.map(s=>Math.hypot(s.x,s.y)))||1;
+  const sc=0.93/maxR;
+  const norm=state.map(s=>({x:s.x*sc, y:s.y*sc}));
+  const fa=norm[hyperFocus];
+  return norm.map(p=>mobius(p.x,p.y,fa.x,fa.y));
+}
+function hyperNodeR(hx,hy){ return Math.max(5,22*(1-Math.hypot(hx,hy)*0.75)); }
+function d2s(hx,hy){ const r=diskR(); return {x:W/2+hx*r, y:H/2+hy*r}; }
 
 // ─── INTERACTION ─────────────────────────────────────────────────────────────
-let isDragging = false, dragStart = {x:0,y:0}, camStart = {x:0,y:0};
+let isDragging=false, dragStart={x:0,y:0}, camStart={x:0,y:0};
 
-function toWorld(sx, sy) {
-  return { x: (sx - W/2)/cam.scale - cam.x, y: (sy - H/2)/cam.scale - cam.y };
-}
+function toWorld(sx,sy){ return {x:(sx-W/2)/cam.scale-cam.x, y:(sy-H/2)/cam.scale-cam.y}; }
 
-function hitTestNormal(sx, sy) {
-  const w = toWorld(sx, sy);
-  let best = null, bestD = (18 / cam.scale) + 6;
-  state.forEach((s, i) => {
-    const d = Math.hypot(s.x - w.x, s.y - w.y);
-    if (d < bestD) { bestD = d; best = i; }
-  });
+function hitTest(sx,sy){
+  if(hyperMode){
+    const R=diskR(), disk=projectToDisk();
+    const hx=(sx-W/2)/R, hy=(sy-H/2)/R;
+    let best=null, bestD=0.12;
+    disk.forEach((p,i)=>{const d=Math.hypot(p.x-hx,p.y-hy); if(d<bestD){bestD=d;best=i;}});
+    return best;
+  }
+  const w=toWorld(sx,sy); let best=null, bestD=20/cam.scale+5;
+  state.forEach((s,i)=>{const d=Math.hypot(s.x-w.x,s.y-w.y); if(d<bestD){bestD=d;best=i;}});
   return best;
 }
 
-function hitTestHyper(sx, sy) {
-  const disk = projectToDisk();
-  const r    = diskR();
-  // convert screen click to unit-disk coords
-  const hx = (sx - W/2) / r, hy = (sy - H/2) / r;
-  let best = null, bestD = 0.12;
-  disk.forEach((p, i) => {
-    const d = Math.hypot(p.x - hx, p.y - hy);
-    if (d < bestD) { bestD = d; best = i; }
-  });
-  return best;
-}
-
-canvas.addEventListener('mousedown', e => {
-  const hit = hyperMode ? hitTestHyper(e.clientX, e.clientY)
-                        : hitTestNormal(e.clientX, e.clientY);
-  if (hit !== null) {
-    plannedPath = bfsPath(traveler.from, hit);
-    hyperFocus  = hit;
-    document.getElementById('current-node').textContent = NODES[hit].label;
-    document.getElementById('current-edge').textContent =
-      '→ ' + plannedPath.map(i => NODES[i].label).join(' → ');
-  } else if (!hyperMode) {
-    isDragging = true;
-    dragStart  = { x: e.clientX, y: e.clientY };
-    camStart   = { x: cam.x, y: cam.y };
+canvas.addEventListener('mousedown', e=>{
+  const hit=hitTest(e.clientX,e.clientY);
+  if(hit!==null){
+    if(gameMode){
+      // in game mode, click = choose next node if adjacent
+      if(adj[agents[0].from].includes(hit) && agents[0].waitingForChoice) playerChoose(hit);
+    } else {
+      // send player agent toward clicked node
+      agents[0].plannedPath=bfsPath(agents[0].from, hit);
+      hyperFocus=hit;
+    }
+    document.getElementById('current-node').textContent=NODES[hit].label;
+  } else if(!hyperMode){
+    isDragging=true; dragStart={x:e.clientX,y:e.clientY}; camStart={x:cam.x,y:cam.y};
   }
 });
-canvas.addEventListener('mousemove', e => {
-  if (!isDragging) return;
-  cam.x = camStart.x + (e.clientX - dragStart.x) / cam.scale;
-  cam.y = camStart.y + (e.clientY - dragStart.y) / cam.scale;
+canvas.addEventListener('mousemove', e=>{
+  if(!isDragging) return;
+  cam.x=camStart.x+(e.clientX-dragStart.x)/cam.scale;
+  cam.y=camStart.y+(e.clientY-dragStart.y)/cam.scale;
 });
-canvas.addEventListener('mouseup', () => { isDragging = false; });
-canvas.addEventListener('wheel', e => {
+canvas.addEventListener('mouseup',()=>{ isDragging=false; });
+canvas.addEventListener('wheel', e=>{
   e.preventDefault();
-  const f = e.deltaY < 0 ? 1.1 : 0.9;
-  if (hyperMode) {
-    // zoom = scale the disk conceptually via cam.scale (reused for disk size multiplier)
-    cam.scale = Math.max(0.4, Math.min(3, cam.scale * f));
-  } else {
-    cam.scale = Math.max(0.2, Math.min(5, cam.scale * f));
-  }
-}, { passive: false });
+  cam.scale=Math.max(0.2,Math.min(5,cam.scale*(e.deltaY<0?1.1:0.9)));
+},{passive:false});
 
-const modeBadge = document.getElementById('mode-badge');
-window.addEventListener('keydown', e => {
-  if (e.key === 'h' || e.key === 'H') {
-    hyperMode = !hyperMode;
-    modeBadge.textContent = hyperMode ? 'HYPER · POINCARÉ' : 'NORMAL';
-    modeBadge.className   = hyperMode ? 'hyper' : 'normal';
+window.addEventListener('keydown', e=>{
+  if(e.key==='h'||e.key==='H'){
+    hyperMode=!hyperMode;
+    const mb=document.getElementById('badge-mode');
+    mb.textContent=hyperMode?'HYPER · POINCARÉ':'NORMAL';
+    mb.className='badge '+(hyperMode?'badge-hyper':'badge-normal');
+  }
+  if(e.key==='g'||e.key==='G'){
+    gameMode=!gameMode;
+    document.getElementById('badge-game').style.display=gameMode?'inline-block':'none';
+    if(gameMode){ newTarget(); agents[0].waitingForChoice=false; }
+    else { choicesDiv.innerHTML=''; gameTarget=null; }
+  }
+  // digit keys for choice
+  const k=parseInt(e.key);
+  if(gameMode && agents[0].waitingForChoice && !isNaN(k) && k>=1){
+    const options=adj[agents[0].from];
+    if(k<=options.length) playerChoose(options[k-1]);
   }
 });
+
+// ─── AUDIO ───────────────────────────────────────────────────────────────────
+let audioCtx = null;
+function ensureAudio(){ if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)(); }
+
+// category → base MIDI note (C pentatonic)
+const CAT_NOTES = [261.63, 329.63, 392.00, 523.25]; // C4 E4 G4 C5
+
+function playNote(cat, volume=0.18, dur=0.22){
+  ensureAudio();
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.type      = 'sine';
+  osc.frequency.value = CAT_NOTES[cat] * (0.98 + Math.random()*0.04);
+  gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+dur);
+  osc.start(); osc.stop(audioCtx.currentTime+dur);
+}
+
+function playArrival(cat){ playNote(cat, 0.22, 0.3); }
+function playScore()     {
+  ensureAudio();
+  [523.25, 659.25, 783.99].forEach((f,i)=>{
+    const osc=audioCtx.createOscillator(), g=audioCtx.createGain();
+    osc.connect(g); g.connect(audioCtx.destination);
+    osc.type='triangle'; osc.frequency.value=f;
+    g.gain.setValueAtTime(0.15, audioCtx.currentTime+i*0.1);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+i*0.1+0.4);
+    osc.start(audioCtx.currentTime+i*0.1); osc.stop(audioCtx.currentTime+i*0.1+0.4);
+  });
+}
+
+// ─── AGENT STEP ──────────────────────────────────────────────────────────────
+function stepAgents(){
+  agents.forEach((ag,ai)=>{
+    const isPlayer = ai===0 && gameMode;
+
+    // player waiting for choice — don't move
+    if(isPlayer && ag.waitingForChoice) return;
+
+    ag.t += ag.speed;
+    if(ag.t >= 1){
+      deposit(ag, ag.from, ag.to);
+      ag.t    = 0;
+      ag.from = ag.to;
+
+      if(ai===0) hyperFocus=ag.from;
+
+      // play arrival note
+      playArrival(NODES[ag.from].cat);
+
+      // game mode: check if player reached target
+      if(isPlayer && gameTarget===ag.from){
+        ag.score++;
+        playScore();
+        newTarget();
+      }
+
+      if(isPlayer){
+        // pause and show choices
+        ag.waitingForChoice=true;
+        renderChoices();
+        return;
+      }
+
+      // bot: follow planned path or choose by pheromone bias
+      if(ag.plannedPath.length>1 && ag.plannedPath[0]===ag.from){
+        ag.plannedPath.shift(); ag.to=ag.plannedPath[0];
+      } else {
+        const options=adj[ag.from];
+        // ACO choice: pheromone + random
+        const scores=options.map(nb=>{
+          const idx=EDGES.findIndex(([a,b])=>(a===ag.from&&b===nb)||(a===nb&&b===ag.from));
+          return Math.pow(ag.pheromones[idx]??0.03, 2) + 0.1;
+        });
+        const total=scores.reduce((s,x)=>s+x,0);
+        let r=Math.random()*total, chosen=options[0];
+        for(let k=0;k<options.length;k++){ r-=scores[k]; if(r<=0){chosen=options[k];break;} }
+        ag.to=chosen;
+      }
+    }
+
+    const a=state[ag.from], b=state[ag.to];
+    const x=a.x+(b.x-a.x)*ag.t, y=a.y+(b.y-a.y)*ag.t;
+    ag.trail.push({x,y});
+    if(ag.trail.length>35) ag.trail.shift();
+  });
+}
 
 // ─── RENDER ──────────────────────────────────────────────────────────────────
-let frame = 0;
+let frame=0;
 
-// draw background grid for normal mode
-function drawGrid() {
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-  ctx.lineWidth = 1;
-  const step = 80 * cam.scale;
-  const ox   = ((cam.x * cam.scale + W/2) % step + step) % step;
-  const oy   = ((cam.y * cam.scale + H/2) % step + step) % step;
-  for (let x = ox; x < W; x += step) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-  for (let y = oy; y < H; y += step) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
-  ctx.restore();
+// Combined pheromone heatmap across all agents
+function combinedPheromone(ei){
+  return Math.min(1, agents.reduce((s,ag)=>s+ag.pheromones[ei],0));
 }
 
-// edge color/width driven by pheromone level
-function edgeStyle(ei) {
-  const ph = pheromones[ei];
-  // hot trail: cyan→orange→white as pheromone increases
-  const hue    = 200 - ph * 180; // 200(cyan) → 20(orange)
-  const alpha  = 0.18 + ph * 0.7;
-  const width  = 0.8 + ph * 4;
-  return { hue, alpha, width };
+function edgeStyle(ei){
+  const ph=combinedPheromone(ei);
+  return { hue:200-ph*180, alpha:0.18+ph*0.65, width:0.8+ph*4, blur:4+ph*14 };
 }
 
-function drawNormal() {
-  drawGrid();
-  ctx.save();
-  ctx.translate(W/2, H/2);
-  ctx.scale(cam.scale, cam.scale);
-  ctx.translate(cam.x, cam.y);
+function triangleHue(a,b,c){
+  return ((NODES[a].cat+NODES[b].cat+NODES[c].cat)/3/3)*280+30;
+}
 
-  // Terrain
-  const coords = state.flatMap(s => [s.x, s.y]);
-  const del    = new Delaunator(coords);
-  const tris   = del.triangles;
-  for (let i = 0; i < tris.length; i += 3) {
-    const a = tris[i], b = tris[i+1], c = tris[i+2];
-    const sa = state[a], sb = state[b], sc = state[c];
-    const pulse = 0.12 + 0.04 * Math.sin(frame * 0.02 + i * 0.3);
-    const hue   = triangleHue(a, b, c);
-    ctx.beginPath(); ctx.moveTo(sa.x,sa.y); ctx.lineTo(sb.x,sb.y); ctx.lineTo(sc.x,sc.y); ctx.closePath();
-    ctx.fillStyle   = `hsla(${hue},70%,35%,${pulse})`;
-    ctx.strokeStyle = `hsla(${hue},60%,70%,0.07)`;
-    ctx.lineWidth = 0.5;
+function drawTerrain(positions){
+  const coords=positions.flatMap(p=>[p.x,p.y]);
+  const del=new Delaunator(coords), tris=del.triangles;
+  for(let i=0;i<tris.length;i+=3){
+    const a=positions[tris[i]], b=positions[tris[i+1]], c=positions[tris[i+2]];
+    if(!a||!b||!c) continue;
+    const hue=triangleHue(tris[i],tris[i+1],tris[i+2]);
+    const pulse=0.11+0.04*Math.sin(frame*0.02+i*0.3);
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.lineTo(c.x,c.y); ctx.closePath();
+    ctx.fillStyle=`hsla(${hue},70%,33%,${pulse})`;
+    ctx.strokeStyle=`hsla(${hue},60%,70%,0.07)`; ctx.lineWidth=0.5;
     ctx.fill(); ctx.stroke();
   }
-
-  // Edges with pheromone heat
-  EDGES.forEach(([a, b], ei) => {
-    const sa = state[a], sb = state[b];
-    const { hue, alpha, width } = edgeStyle(ei);
-    ctx.save();
-    ctx.shadowColor = `hsl(${hue},85%,65%)`;
-    ctx.shadowBlur  = 4 + pheromones[ei] * 14;
-    ctx.strokeStyle = `hsla(${hue},75%,65%,${alpha})`;
-    ctx.lineWidth   = width;
-    ctx.beginPath(); ctx.moveTo(sa.x,sa.y); ctx.lineTo(sb.x,sb.y); ctx.stroke();
-    ctx.restore();
-  });
-
-  // Trail
-  traveler.trail.forEach((pt, i) => {
-    const a = (i / traveler.trail.length) * 0.7;
-    ctx.beginPath(); ctx.arc(pt.x, pt.y, (i / traveler.trail.length)*4, 0, Math.PI*2);
-    ctx.fillStyle = `rgba(100,220,255,${a})`; ctx.fill();
-  });
-
-  // Nodes
-  state.forEach((s, i) => {
-    const [h, sat, l] = CAT_COLORS[NODES[i].category];
-    const isTarget  = plannedPath.length > 0 && plannedPath[plannedPath.length-1] === i;
-    const isCurrent = traveler.from === i;
-    const r = 18;
-    const glowR = isTarget ? r*2.5 : isCurrent ? r*2 : r*1.4;
-    const grd = ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,glowR);
-    grd.addColorStop(0, `hsla(${h},${sat}%,${l+30}%,0.5)`);
-    grd.addColorStop(1, `hsla(${h},${sat}%,${l}%,0)`);
-    ctx.beginPath(); ctx.arc(s.x,s.y,glowR,0,Math.PI*2); ctx.fillStyle = grd; ctx.fill();
-
-    ctx.save();
-    ctx.shadowColor = `hsl(${h},${sat}%,70%)`; ctx.shadowBlur = isTarget ? 25 : 12;
-    ctx.beginPath(); ctx.arc(s.x,s.y,r,0,Math.PI*2);
-    ctx.fillStyle = `hsla(${h},${sat}%,${l+15}%,0.85)`;
-    ctx.fill();
-    if (isTarget) { ctx.strokeStyle = `hsl(${h},90%,80%)`; ctx.lineWidth=2; ctx.stroke(); }
-    ctx.restore();
-
-    ctx.fillStyle = `hsla(${h},60%,85%,0.9)`;
-    ctx.font      = `${isCurrent ? 'bold ' : ''}11px monospace`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(NODES[i].label, s.x, s.y + r + 12);
-  });
-
-  // Traveler
-  const pa = state[traveler.from], pb = state[traveler.to];
-  const tx = pa.x + (pb.x-pa.x)*traveler.t, ty = pa.y + (pb.y-pa.y)*traveler.t;
-  const pr = 5 + 2*Math.sin(frame*0.15);
-  ctx.save();
-  ctx.shadowColor = '#4fc3f7'; ctx.shadowBlur = 20;
-  const grd2 = ctx.createRadialGradient(tx,ty,0,tx,ty,pr);
-  grd2.addColorStop(0,'rgba(255,255,255,1)');
-  grd2.addColorStop(0.4,'rgba(100,220,255,0.9)');
-  grd2.addColorStop(1,'rgba(50,100,255,0)');
-  ctx.beginPath(); ctx.arc(tx,ty,pr,0,Math.PI*2); ctx.fillStyle=grd2; ctx.fill();
-  ctx.restore();
-
-  ctx.restore();
 }
 
-function drawHyper() {
-  const R    = diskR() * cam.scale;
-  const disk = projectToDisk();
-
-  // ── Disk boundary ──
-  // Background gradient (depth cue — fades to black at edge)
-  const bgGrd = ctx.createRadialGradient(W/2,H/2,0, W/2,H/2,R);
-  bgGrd.addColorStop(0,   'rgba(14,10,40,0.9)');
-  bgGrd.addColorStop(0.7, 'rgba(8,6,25,0.95)');
-  bgGrd.addColorStop(1,   'rgba(2,2,8,1)');
-  ctx.save();
-  ctx.beginPath(); ctx.arc(W/2,H/2,R,0,Math.PI*2);
-  ctx.fillStyle = bgGrd; ctx.fill();
-  // rim glow
-  ctx.strokeStyle = 'rgba(171,71,188,0.4)';
-  ctx.lineWidth   = 2; ctx.shadowColor='#ab47bc'; ctx.shadowBlur=20;
-  ctx.stroke();
-  ctx.restore();
-
-  // Clip to disk
-  ctx.save();
-  ctx.beginPath(); ctx.arc(W/2,H/2,R-1,0,Math.PI*2); ctx.clip();
-
-  // ── Terrain triangles (in disk space) ──
-  const coords = disk.flatMap(p => [p.x, p.y]);
-  try {
-    const del  = new Delaunator(coords);
-    const tris = del.triangles;
-    for (let i = 0; i < tris.length; i += 3) {
-      const a = tris[i], b = tris[i+1], c = tris[i+2];
-      const pa = d2s(disk[a].x,disk[a].y), pb = d2s(disk[b].x,disk[b].y), pc = d2s(disk[c].x,disk[c].y);
-      const pulse = 0.1 + 0.035*Math.sin(frame*0.02 + i*0.3);
-      const hue   = triangleHue(a,b,c);
-      ctx.beginPath(); ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y); ctx.lineTo(pc.x,pc.y); ctx.closePath();
-      ctx.fillStyle   = `hsla(${hue},65%,30%,${pulse})`;
-      ctx.strokeStyle = `hsla(${hue},55%,65%,0.07)`;
-      ctx.lineWidth   = 0.5; ctx.fill(); ctx.stroke();
-    }
-  } catch { /* skip degenerate */ }
-
-  // ── Edges ──
-  EDGES.forEach(([a, b], ei) => {
-    const pa = d2s(disk[a].x,disk[a].y), pb = d2s(disk[b].x,disk[b].y);
-    const { hue, alpha, width } = edgeStyle(ei);
+function drawEdges(positions){
+  EDGES.forEach(([a,b],ei)=>{
+    const pa=positions[a], pb=positions[b];
+    const {hue,alpha,width,blur}=edgeStyle(ei);
     ctx.save();
-    ctx.shadowColor = `hsl(${hue},85%,65%)`; ctx.shadowBlur = 4 + pheromones[ei]*14;
-    ctx.strokeStyle = `hsla(${hue},75%,65%,${alpha})`;
-    ctx.lineWidth   = width;
+    ctx.shadowColor=`hsl(${hue},85%,65%)`; ctx.shadowBlur=blur;
+    ctx.strokeStyle=`hsla(${hue},75%,65%,${alpha})`; ctx.lineWidth=width;
     ctx.beginPath(); ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y); ctx.stroke();
     ctx.restore();
   });
+}
 
-  // ── Trail (project each trail point) ──
-  // approximate by projecting current traveler position
-  const maxR2  = Math.max(...state.map(s => Math.hypot(s.x, s.y))) || 1;
-  const scale2 = 0.93 / maxR2;
-  const fa     = { x: state[hyperFocus].x*scale2, y: state[hyperFocus].y*scale2 };
-  traveler.trail.forEach((pt, i) => {
-    const np  = { x: pt.x*scale2, y: pt.y*scale2 };
-    const mp  = mobius(np.x, np.y, fa.x, fa.y);
-    const sp  = d2s(mp.x, mp.y);
-    const al  = (i / traveler.trail.length) * 0.65;
-    const sz  = (i / traveler.trail.length) * 3.5;
-    ctx.beginPath(); ctx.arc(sp.x, sp.y, sz, 0, Math.PI*2);
-    ctx.fillStyle = `rgba(100,220,255,${al})`; ctx.fill();
-  });
+function drawNodes(positions, nodeR){
+  NODES.forEach((n,i)=>{
+    const pos=positions[i];
+    const isTarget  = gameMode && gameTarget===i;
+    const r = nodeR ? nodeR(i, pos) : 18;
+    const hue=CAT_HUE[n.cat];
 
-  // ── Nodes ──
-  disk.forEach((p, i) => {
-    const [h, sat, l] = CAT_COLORS[NODES[i].category];
-    const isTarget  = plannedPath.length > 0 && plannedPath[plannedPath.length-1] === i;
-    const isCurrent = traveler.from === i;
-    const isFocus   = hyperFocus === i;
-    const sp        = d2s(p.x, p.y);
-    const nr        = hyperNodeR(p.x, p.y);
-
-    // outer glow
-    const glowR = nr * (isTarget ? 2.8 : isFocus ? 2.5 : 1.8);
-    const grd   = ctx.createRadialGradient(sp.x,sp.y,0,sp.x,sp.y,glowR);
-    grd.addColorStop(0, `hsla(${h},${sat}%,${l+30}%,${isFocus?0.7:0.4})`);
-    grd.addColorStop(1, `hsla(${h},${sat}%,${l}%,0)`);
-    ctx.beginPath(); ctx.arc(sp.x,sp.y,glowR,0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
+    const glowR=r*(isTarget?3.2:1.6);
+    const grd=ctx.createRadialGradient(pos.x,pos.y,0,pos.x,pos.y,glowR);
+    grd.addColorStop(0,`hsla(${hue},75%,60%,${isTarget?0.7:0.35})`);
+    grd.addColorStop(1,`hsla(${hue},60%,40%,0)`);
+    ctx.beginPath(); ctx.arc(pos.x,pos.y,glowR,0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
 
     ctx.save();
-    ctx.shadowColor = `hsl(${h},${sat}%,70%)`; ctx.shadowBlur = isFocus ? 30 : 12;
-    ctx.beginPath(); ctx.arc(sp.x,sp.y,nr,0,Math.PI*2);
-    ctx.fillStyle = `hsla(${h},${sat}%,${l+15}%,${0.7+nr/30})`;
-    ctx.fill();
-    if (isTarget || isFocus) {
-      ctx.strokeStyle = `hsl(${h},90%,85%)`; ctx.lineWidth = isFocus ? 2.5 : 1.5; ctx.stroke();
+    ctx.shadowColor=`hsl(${hue},80%,70%)`; ctx.shadowBlur=isTarget?28:10;
+    ctx.beginPath(); ctx.arc(pos.x,pos.y,r,0,Math.PI*2);
+    ctx.fillStyle=`hsla(${hue},70%,40%,0.85)`; ctx.fill();
+    if(isTarget){
+      // pulsing ring for target
+      const pr=r+4+3*Math.sin(frame*0.1);
+      ctx.beginPath(); ctx.arc(pos.x,pos.y,pr,0,Math.PI*2);
+      ctx.strokeStyle=`hsl(${hue},90%,80%)`; ctx.lineWidth=2; ctx.stroke();
     }
     ctx.restore();
 
-    // label — only show if node is large enough (not too far from center)
-    if (nr > 9) {
-      ctx.fillStyle = `hsla(${h},60%,90%,${Math.min(1, nr/18)})`;
-      ctx.font      = `${isFocus || isCurrent ? 'bold ' : ''}${Math.max(8, nr*0.65)|0}px monospace`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(NODES[i].label, sp.x, sp.y + nr + 10);
+    const fontSize=nodeR ? Math.max(8,r*0.7)|0 : 11;
+    if(r>7){
+      ctx.fillStyle=`hsla(${hue},60%,88%,${Math.min(1,r/14)})`;
+      ctx.font=`${fontSize}px monospace`; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(n.label, pos.x, pos.y+r+fontSize);
     }
   });
-
-  // ── Traveler ──
-  const norm2   = state.map(s => ({ x: s.x*scale2, y: s.y*scale2 }));
-  const fa2     = norm2[hyperFocus];
-  const ta      = norm2[traveler.from], tb = norm2[traveler.to];
-  const tInterp = { x: ta.x+(tb.x-ta.x)*traveler.t, y: ta.y+(tb.y-ta.y)*traveler.t };
-  const tMob    = mobius(tInterp.x, tInterp.y, fa2.x, fa2.y);
-  const tSp     = d2s(tMob.x, tMob.y);
-  const pr      = 5 + 2*Math.sin(frame*0.15);
-
-  ctx.save();
-  ctx.shadowColor = '#fff'; ctx.shadowBlur = 22;
-  const grd3 = ctx.createRadialGradient(tSp.x,tSp.y,0,tSp.x,tSp.y,pr);
-  grd3.addColorStop(0,'rgba(255,255,255,1)');
-  grd3.addColorStop(0.4,'rgba(100,220,255,0.9)');
-  grd3.addColorStop(1,'rgba(50,100,255,0)');
-  ctx.beginPath(); ctx.arc(tSp.x,tSp.y,pr,0,Math.PI*2); ctx.fillStyle=grd3; ctx.fill();
-  ctx.restore();
-
-  ctx.restore(); // end clip
 }
 
-function draw() {
-  ctx.clearRect(0, 0, W, H);
-  if (hyperMode) drawHyper();
-  else           drawNormal();
+function drawAgent(ag, positions, nodeR){
+  // trail
+  ag.trail.forEach((pt,i)=>{
+    const al=(i/ag.trail.length)*0.6;
+    const sz=(i/ag.trail.length)*3.5;
+    ctx.beginPath(); ctx.arc(pt.x,pt.y,sz,0,Math.PI*2);
+    ctx.fillStyle=ag.color+(Math.round(al*255).toString(16).padStart(2,'0'));
+    ctx.fill();
+  });
 
-  // status label
-  if (traveler.t < 0.05) {
-    document.getElementById('current-node').textContent = NODES[traveler.from].label;
-    if (plannedPath.length <= 1)
-      document.getElementById('current-edge').textContent = '⟶ ' + NODES[traveler.to].label;
+  // body
+  const pa=positions[ag.from], pb=positions[ag.to];
+  if(!pa||!pb) return;
+  const tx=pa.x+(pb.x-pa.x)*ag.t, ty=pa.y+(pb.y-pa.y)*ag.t;
+  const pr=5+2*Math.sin(frame*0.15+ag.from);
+
+  ctx.save();
+  ctx.shadowColor=ag.color; ctx.shadowBlur=20;
+  const grd=ctx.createRadialGradient(tx,ty,0,tx,ty,pr);
+  grd.addColorStop(0,'rgba(255,255,255,1)');
+  grd.addColorStop(0.3,ag.color+'ee');
+  grd.addColorStop(1,ag.color+'00');
+  ctx.beginPath(); ctx.arc(tx,ty,pr,0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
+  ctx.restore();
+}
+
+function drawNormal(){
+  // grid
+  ctx.save();
+  ctx.strokeStyle='rgba(255,255,255,0.025)'; ctx.lineWidth=1;
+  const step=80*cam.scale;
+  const ox=((cam.x*cam.scale+W/2)%step+step)%step;
+  const oy=((cam.y*cam.scale+H/2)%step+step)%step;
+  for(let x=ox;x<W;x+=step){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=oy;y<H;y+=step){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(W/2,H/2); ctx.scale(cam.scale,cam.scale); ctx.translate(cam.x,cam.y);
+  drawTerrain(state);
+  drawEdges(state);
+  agents.forEach(ag=>drawAgent(ag,state,null));
+  drawNodes(state, null);
+  ctx.restore();
+}
+
+function drawHyper(){
+  const R=diskR(), disk=projectToDisk();
+  const bg=ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,R);
+  bg.addColorStop(0,'rgba(14,10,40,0.9)'); bg.addColorStop(0.7,'rgba(8,6,25,0.95)'); bg.addColorStop(1,'rgba(2,2,8,1)');
+  ctx.beginPath(); ctx.arc(W/2,H/2,R,0,Math.PI*2); ctx.fillStyle=bg; ctx.fill();
+  ctx.save(); ctx.shadowColor='#ab47bc'; ctx.shadowBlur=20;
+  ctx.strokeStyle='rgba(171,71,188,0.4)'; ctx.lineWidth=2; ctx.stroke(); ctx.restore();
+
+  ctx.save(); ctx.beginPath(); ctx.arc(W/2,H/2,R-1,0,Math.PI*2); ctx.clip();
+
+  const screen=disk.map(p=>d2s(p.x,p.y));
+  drawTerrain(screen);
+  drawEdges(screen);
+
+  // agent trails projected
+  const maxR=Math.max(...state.map(s=>Math.hypot(s.x,s.y)))||1, sc=0.93/maxR;
+  const fa={x:state[hyperFocus].x*sc, y:state[hyperFocus].y*sc};
+
+  agents.forEach(ag=>{
+    const projTrail=ag.trail.map(pt=>{
+      const mp=mobius(pt.x*sc,pt.y*sc,fa.x,fa.y);
+      return d2s(mp.x,mp.y);
+    });
+    // draw projected trail
+    projTrail.forEach((pt,i)=>{
+      const al=(i/projTrail.length)*0.6, sz=(i/projTrail.length)*3.5;
+      ctx.beginPath(); ctx.arc(pt.x,pt.y,sz,0,Math.PI*2);
+      ctx.fillStyle=ag.color+(Math.round(al*255).toString(16).padStart(2,'0'));
+      ctx.fill();
+    });
+  });
+
+  const norm=state.map(s=>({x:s.x*sc,y:s.y*sc}));
+  agents.forEach(ag=>{
+    const pa=norm[ag.from], pb=norm[ag.to];
+    const ti={x:pa.x+(pb.x-pa.x)*ag.t, y:pa.y+(pb.y-pa.y)*ag.t};
+    const tm=mobius(ti.x,ti.y,fa.x,fa.y), ts=d2s(tm.x,tm.y);
+    const pr=5+2*Math.sin(frame*0.15);
+    ctx.save(); ctx.shadowColor=ag.color; ctx.shadowBlur=18;
+    const grd=ctx.createRadialGradient(ts.x,ts.y,0,ts.x,ts.y,pr);
+    grd.addColorStop(0,'rgba(255,255,255,1)'); grd.addColorStop(0.4,ag.color+'dd'); grd.addColorStop(1,ag.color+'00');
+    ctx.beginPath(); ctx.arc(ts.x,ts.y,pr,0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
+    ctx.restore();
+  });
+
+  drawNodes(screen, (i,pos)=>hyperNodeR(disk[i].x,disk[i].y));
+  ctx.restore();
+}
+
+// ─── SCORE PANEL ─────────────────────────────────────────────────────────────
+function renderScorePanel(){
+  const panel=document.getElementById('score-panel');
+  panel.innerHTML=agents.map((ag,i)=>`
+    <div class="score-row">
+      <span style="opacity:.6; font-size:10px">${ag.name}</span>
+      <div class="dot" style="background:${ag.color}"></div>
+      <span style="font-weight:bold; color:${ag.color}">${ag.score}</span>
+    </div>
+  `).join('');
+}
+
+// ─── STATUS UI ───────────────────────────────────────────────────────────────
+function updateStatus(){
+  const ag=agents[0];
+  document.getElementById('current-node').textContent=NODES[ag.from].label;
+  if(gameMode && gameTarget!==null){
+    document.getElementById('path-line').textContent=
+      `→ цель: ${NODES[gameTarget].label}`;
+  } else if(ag.plannedPath.length>1){
+    document.getElementById('path-line').textContent=
+      ag.plannedPath.map(i=>NODES[i].label).join(' → ');
   }
+}
+
+// ─── MAIN DRAW ───────────────────────────────────────────────────────────────
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  if(hyperMode) drawHyper();
+  else          drawNormal();
+  renderScorePanel();
+  updateStatus();
   frame++;
 }
 
 // ─── LOOP ────────────────────────────────────────────────────────────────────
-function loop() {
+function loop(){
   physicsStep();
-  evaporatePheromones();
-  stepTraveler();
+  evaporate();
+  stepAgents();
   draw();
   requestAnimationFrame(loop);
 }
 
+// Init first choices if game starts immediately
 loop();
 </script>
 </body>
