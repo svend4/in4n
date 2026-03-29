@@ -6,7 +6,10 @@ import InfoPanel from './components/InfoPanel.jsx';
 import TerrainOverlay from './components/TerrainOverlay.jsx';
 import SemanticZoom from './components/SemanticZoom.jsx';
 import AgentHUD from './components/AgentHUD.jsx';
+import QueryPanel from './components/QueryPanel.jsx';
+import Q6Overlay from './components/Q6Overlay.jsx';
 import { useAudio } from './hooks/useAudio.js';
+import { useInfoM } from './hooks/useInfoM.js';
 
 const AGENT_COLORS = ['#4fc3f7','#ff6b9d','#c792ea','#80cbc4','#ffd54f'];
 
@@ -75,18 +78,31 @@ export default function App() {
 
   const [era,           setEra]          = useState(TIME_ERAS.length);
   const [voronoiMode,   setVoronoiMode]  = useState(false);
+  const [q6Mode,        setQ6Mode]       = useState(false);
+  const [queryOpen,     setQueryOpen]    = useState(false);
   const [currentNodeId, setCurrentNodeId] = useState(GRAPH_DATA.nodes[0].id);
   const [targetNodeId,  setTargetNodeId]  = useState(null);
   const [travelPath,    setTravelPath]    = useState([GRAPH_DATA.nodes[0].id]);
   const [nodePositions, setNodePositions] = useState([]);
-  const [nearNode,      setNearNode]      = useState(null);   // semantic zoom target
+  const [nearNode,      setNearNode]      = useState(null);
+  const [frameCount,    setFrameCount]    = useState(0);
+  const [activeArchetype, setActiveArchetype] = useState(null);
 
-  // V key toggles Voronoi terrain
+  // InfoM integration
+  const infom = useInfoM();
+
+  // Keyboard: V=Voronoi, Q=Q6, /=query, Escape=close
   useEffect(() => {
-    const onKey = e => { if (e.key === 'v' || e.key === 'V') setVoronoiMode(m => !m); };
+    const onKey = e => {
+      if (queryOpen && e.key !== 'Escape') return; // let QueryPanel handle keys
+      if (e.key === 'v' || e.key === 'V') setVoronoiMode(m => !m);
+      if (e.key === 'q' || e.key === 'Q') setQ6Mode(m => !m);
+      if (e.key === '/')  { e.preventDefault(); setQueryOpen(true); }
+      if (e.key === 'Escape') { setQueryOpen(false); setActiveArchetype(null); }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [queryOpen]);
 
   // Multiple agents (index 0 = primary/player)
   const detailNodes = GRAPH_DATA.nodes.filter(n => n.level < 3);
@@ -292,12 +308,38 @@ export default function App() {
         setNearNode(closest && closest.distToCamera < ZOOM_THRESHOLD ? closest : null);
       }
 
+      setFrameCount(f => f + 1);
       raf = requestAnimationFrame(tick);
     }
 
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [filteredLinks, size, playArrival]);
+
+  // ── InfoM query: navigate agent to relevant archetype ──────────────────
+  const handleInfoMQuery = useCallback(async (question, mode) => {
+    const answer = await infom.query(question, mode);
+    const arch   = answer.archetypeHint;
+    setActiveArchetype(arch);
+    // Navigate primary agent to the archetype node
+    if (arch) {
+      const archNode = GRAPH_DATA.nodes.find(n => n.id === arch);
+      if (archNode) {
+        const tr   = agentsRef.current[0];
+        const path = bfsPath(filteredLinks, tr.from, arch);
+        tr.plannedPath = path;
+        setTargetNodeId(arch);
+        setTravelPath(path);
+        if (fgRef.current) {
+          fgRef.current.cameraPosition(
+            { x: (archNode.x ?? 0) * 1.6, y: (archNode.y ?? 0) * 1.6, z: 140 },
+            archNode, 2000,
+          );
+        }
+      }
+    }
+    return answer;
+  }, [infom, filteredLinks]);
 
   // ── Click: set primary agent target + fly camera ──
   const handleNodeClick = useCallback(node => {
@@ -345,7 +387,19 @@ export default function App() {
         enableNodeDrag={false}
       />
 
+      {/* Terrain or Voronoi overlay */}
       <TerrainOverlay nodePositions={nodePositions} width={size.w} height={size.h} opacity={0.14} voronoi={voronoiMode} />
+
+      {/* Q6 hexagonal grid overlay (Q key) */}
+      {q6Mode && (
+        <Q6Overlay
+          width={size.w}
+          height={size.h}
+          communities={infom.communities}
+          activeArchetype={activeArchetype}
+          frame={frameCount}
+        />
+      )}
 
       {/* Semantic zoom popup */}
       <SemanticZoom nearNode={nearNode} nodeDetails={NODE_DETAILS} />
@@ -360,7 +414,20 @@ export default function App() {
         era={era}
         onEraChange={setEra}
         maxEra={TIME_ERAS.length}
+        infom={infom}
+        q6Mode={q6Mode}
+        onToggleQ6={() => setQ6Mode(m => !m)}
       />
+
+      {/* Query Panel (/ key) */}
+      {queryOpen && (
+        <QueryPanel
+          onQuery={handleInfoMQuery}
+          onClose={() => setQueryOpen(false)}
+          infomStatus={infom.status}
+          communities={infom.communities}
+        />
+      )}
     </div>
   );
 }

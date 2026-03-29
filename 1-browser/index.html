@@ -26,6 +26,69 @@
     .badge-voronoi { background: rgba(128,203,196,.15); color:#80cbc4; border:1px solid #80cbc466; }
     .badge-cross   { background: rgba(255,138,101,.15); color:#ff8a65; border:1px solid #ff8a6566; }
     .badge-edit    { background: rgba(255,213,79,.22);  color:#ffd54f; border:1px solid #ffd54faa; text-shadow:0 0 8px #ffd54faa; }
+    .badge-q6      { background: rgba(128,203,196,.15); color:#80cbc4; border:1px solid #80cbc466; }
+    /* InfoM panel */
+    #infom-panel {
+      position: fixed; top: 20px; right: 20px;
+      font-family: monospace; font-size: 10px; z-index: 20;
+    }
+    #infom-badge {
+      display: flex; align-items: center; gap: 7px;
+      padding: 5px 12px; border-radius: 20px; cursor: pointer;
+      background: rgba(7,7,20,0.85); border: 1px solid #33445544;
+      user-select: none; transition: border-color 0.2s;
+    }
+    #infom-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: #445; }
+    #infom-expand {
+      display: none; margin-top: 8px; padding: 14px;
+      background: rgba(7,7,20,0.97); border: 1px solid rgba(79,195,247,0.15);
+      border-radius: 10px; width: 240px; box-shadow: 0 4px 30px rgba(0,0,0,.7);
+    }
+    #infom-expand input, #infom-expand textarea {
+      width: 100%; background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(79,195,247,0.2); border-radius: 6px;
+      color: #ccc; font-family: monospace; font-size: 11px;
+      padding: 5px 8px; outline: none; box-sizing: border-box;
+    }
+    #infom-expand textarea { resize: none; }
+    .infom-btn {
+      padding: 5px 10px; border-radius: 6px; cursor: pointer;
+      background: rgba(79,195,247,0.15); border: 1px solid #4fc3f744;
+      color: #4fc3f7; font-family: monospace; font-size: 10px;
+    }
+    #infom-stats { margin-top:8px; font-size:10px; line-height:2; color:#667; }
+    #infom-stats span { color:#4fc3f7; float:right; }
+    /* Query panel */
+    #query-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(7,7,20,0.78); backdrop-filter: blur(6px);
+      z-index: 50; align-items: center; justify-content: center;
+    }
+    #query-overlay.open { display: flex; }
+    #query-box {
+      width: 600px; max-width: 92vw;
+      background: rgba(10,10,28,0.98);
+      border: 1px solid rgba(79,195,247,0.25); border-radius: 16px;
+      padding: 20px; font-family: monospace;
+      box-shadow: 0 0 60px rgba(79,195,247,.12);
+    }
+    #query-input {
+      width: 100%; background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(79,195,247,0.2); border-radius: 8px;
+      color: #e8e8ff; font-family: monospace; font-size: 14px;
+      padding: 10px 14px; outline: none; box-sizing: border-box; resize: none;
+    }
+    #query-answer {
+      margin-top: 12px; padding: 12px;
+      background: rgba(255,255,255,0.02); border-radius: 8px;
+      font-size: 13px; line-height: 1.7; color: #ccd;
+      max-height: 240px; overflow-y: auto; white-space: pre-wrap;
+      display: none;
+    }
+    #query-archetype {
+      font-size: 10px; margin-bottom: 8px; padding: 5px 10px;
+      border-radius: 6px; display: inline-block;
+    }
     /* Score panel */
     #score-panel {
       position: fixed; top: 20px; right: 20px;
@@ -67,12 +130,52 @@
     <span id="badge-voronoi" class="badge badge-voronoi" style="display:none">VORONOI</span>
     <span id="badge-cross"   class="badge badge-cross"   style="display:none">CROSSWORD</span>
     <span id="badge-edit"    class="badge badge-edit"    style="display:none">EDIT</span>
+    <span id="badge-q6"      class="badge badge-q6"      style="display:none">Q6</span>
   </div>
 </div>
 
 <div id="score-panel"></div>
 <div id="choices"></div>
-<div id="hint">H – гиперб. · G – игра · V – ворон. · C – кросс. · E – ред. · Клик/цифра – выбор · Скролл – зум</div>
+<div id="hint">H гиперб. · G игра · V ворон. · Q Q6 · C кросс. · E ред. · / запрос · Скролл зум</div>
+
+<!-- InfoM connection panel -->
+<div id="infom-panel">
+  <div id="infom-badge" onclick="toggleInfoMExpand()">
+    <div class="dot" id="infom-dot"></div>
+    <span id="infom-label" style="letter-spacing:1px">INFOM</span>
+    <span id="infom-counts" style="opacity:.5; color:#aaa"></span>
+    <span id="infom-caret" style="opacity:.3">▼</span>
+  </div>
+  <div id="infom-expand">
+    <div style="font-size:9px;opacity:.4;letter-spacing:1px;margin-bottom:5px">URL СЕРВЕРА</div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <input id="infom-url" value="http://localhost:8000" placeholder="http://localhost:8000" />
+      <button class="infom-btn" onclick="infomConnect()">→</button>
+    </div>
+    <div id="infom-stats"></div>
+    <div style="margin-top:10px;font-size:9px;opacity:.4;letter-spacing:1px;margin-bottom:5px">ИНДЕКСИРОВАТЬ ТЕКСТ</div>
+    <textarea id="infom-index-text" rows="3" placeholder="Вставь текст для индексации..."></textarea>
+    <button class="infom-btn" style="margin-top:5px;width:100%" onclick="infomIndexText()">↑ ИНДЕКСИРОВАТЬ</button>
+    <div id="infom-index-msg" style="font-size:9px;color:#80cbc4;margin-top:5px;opacity:.7"></div>
+  </div>
+</div>
+
+<!-- Query overlay -->
+<div id="query-overlay" onclick="queryOverlayClick(event)">
+  <div id="query-box">
+    <div style="font-size:9px;opacity:.4;letter-spacing:2px;margin-bottom:10px">INFOM GRAPHRAG QUERY · Escape закрыть</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <button class="infom-btn" id="qm-hybrid" onclick="setQueryMode('hybrid')">HYBRID</button>
+      <button class="infom-btn" id="qm-local"  onclick="setQueryMode('local')">LOCAL</button>
+      <button class="infom-btn" id="qm-global" onclick="setQueryMode('global')">GLOBAL</button>
+    </div>
+    <textarea id="query-input" rows="2" placeholder="Задай вопрос графу знаний... (Enter — отправить)" onkeydown="queryKeyDown(event)"></textarea>
+    <div id="query-answer">
+      <div id="query-archetype"></div>
+      <div id="query-text"></div>
+    </div>
+  </div>
+</div>
 
 <script src="https://unpkg.com/delaunator@5.0.1/delaunator.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-delaunay@6/dist/d3-delaunay.umd.min.js"></script>
@@ -520,7 +623,12 @@ window.addEventListener('keydown', e=>{
     document.getElementById('badge-edit').style.display=editMode?'inline-block':'none';
     canvas.style.cursor=editMode?'cell':'crosshair';
   }
-  if(e.key==='Escape'){ editSelected=null; }
+  if(e.key==='q'||e.key==='Q'){
+    q6Mode=!q6Mode;
+    document.getElementById('badge-q6').style.display=q6Mode?'inline-block':'none';
+  }
+  if(e.key==='/'){ e.preventDefault(); openQuery(); }
+  if(e.key==='Escape'){ editSelected=null; closeQuery(); activeArchId=null; }
   // digit keys for choice
   const k=parseInt(e.key);
   if(gameMode && agents[0].waitingForChoice && !isNaN(k) && k>=1){
@@ -762,6 +870,7 @@ function drawNormal(){
   drawNodes(state, levelNodeR);
   if(editMode) drawEditOverlay(state);
   ctx.restore();
+  drawQ6Grid();
 }
 
 function drawHyper(){
@@ -814,6 +923,7 @@ function drawHyper(){
   drawNodes(screen, (i,pos)=>hyperNodeR(disk[i].x,disk[i].y) * (levelNodeR(i)/12));
   if(editMode) drawEditOverlay(screen);
   ctx.restore();
+  drawQ6Grid();
 }
 
 // ─── SCORE PANEL ─────────────────────────────────────────────────────────────
@@ -839,6 +949,276 @@ function updateStatus(){
     document.getElementById('path-line').textContent=
       ag.plannedPath.map(i=>NODES[i].label).join(' → ');
   }
+}
+
+// ─── Q6 HEX GRID ─────────────────────────────────────────────────────────────
+let q6Mode        = false;
+let q6Communities = [];   // from infom /stats
+let activeArchId  = null; // archetype name highlighted after query
+
+const Q6_GROUPS = ['time','space','mind','form'];
+const Q6_COLORS = [[255,107,157],[79,195,247],[199,146,234],[128,203,196]];
+const Q6_ARCHS  = ['Бытие','Поток','Познание','Структура'];
+const SHAPE_SYM = n => n>=9?'∿':({3:'△',4:'□',5:'⬠',6:'⬡',7:'☆',8:'✳'}[n]||'◆');
+
+function hexToXY(q, r, sz){
+  return { x: sz*Math.sqrt(3)*(q+r/2), y: sz*(3/2)*r };
+}
+function hexCorners6(cx,cy,sz){
+  return Array.from({length:6},(_,i)=>{
+    const a=Math.PI/3*i+Math.PI/6;
+    return [cx+sz*Math.cos(a),cy+sz*Math.sin(a)];
+  });
+}
+function hexIdToAxial(id){ return {q:id%8-3.5, r:Math.floor(id/8)-3.5}; }
+function parseHexId(s){
+  if(!s) return null;
+  const m=s.match(/(\d+)$/); if(m) return parseInt(m[1])%64;
+  if(/^[01]+$/.test(s)) return parseInt(s,2)%64;
+  return null;
+}
+
+function drawQ6Grid(){
+  if(!q6Mode) return;
+  const sz = Math.min(W,H)*0.038;
+  const ox  = W/2 + cam.x*cam.scale;
+  const oy  = H/2 + cam.y*cam.scale;
+  ctx.save();
+  // background hex grid (all 64 cells)
+  for(let id=0;id<64;id++){
+    const {q,r}=hexIdToAxial(id);
+    const {x,y}=hexToXY(q,r,sz);
+    const corners=hexCorners6(ox+x,oy+y,sz*0.91);
+    ctx.beginPath(); ctx.moveTo(...corners[0]);
+    corners.slice(1).forEach(c=>ctx.lineTo(...c)); ctx.closePath();
+    ctx.strokeStyle='rgba(79,195,247,0.05)'; ctx.lineWidth=0.5; ctx.stroke();
+  }
+  // colored communities
+  const communities = q6Communities.length ? q6Communities :
+    [{hex_id:'hex_18',n_nodes:6,label:'Бытие'},{hex_id:'hex_21',n_nodes:6,label:'Поток'},
+     {hex_id:'hex_42',n_nodes:6,label:'Познание'},{hex_id:'hex_45',n_nodes:6,label:'Структура'}];
+
+  communities.forEach((c,i)=>{
+    const hexId=parseHexId(c.hex_id??`hex_${[18,21,42,45][i%4]}`);
+    if(hexId===null) return;
+    const {q,r}=hexIdToAxial(hexId);
+    const {x,y}=hexToXY(q,r,sz);
+    const px=ox+x, py=oy+y;
+    const [cr,cg,cb]=Q6_COLORS[i%4];
+    const isActive=activeArchId===Q6_ARCHS[i%4];
+    const pulse=isActive?0.28+0.12*Math.sin(frame*0.06):0.08+0.03*Math.sin(frame*0.015+i);
+    const corners=hexCorners6(px,py,sz*0.87);
+    ctx.beginPath(); ctx.moveTo(...corners[0]);
+    corners.slice(1).forEach(c2=>ctx.lineTo(...c2)); ctx.closePath();
+    ctx.fillStyle=`rgba(${cr},${cg},${cb},${pulse})`; ctx.fill();
+    ctx.strokeStyle=isActive?`rgba(${cr},${cg},${cb},0.75)`:`rgba(${cr},${cg},${cb},0.28)`;
+    ctx.lineWidth=isActive?2:0.8;
+    if(isActive){ctx.save();ctx.shadowColor=`rgb(${cr},${cg},${cb})`;ctx.shadowBlur=16;}
+    ctx.stroke();
+    if(isActive) ctx.restore();
+    // shape symbol + label
+    const sym=SHAPE_SYM(c.n_nodes??6);
+    ctx.fillStyle=`rgba(${cr},${cg},${cb},${isActive?0.95:0.55})`;
+    ctx.font=`${sz*0.5}px serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(sym,px,py);
+    ctx.font=`${Math.max(7,sz*0.26)}px monospace`;
+    ctx.fillStyle=`rgba(${cr},${cg},${cb},${isActive?0.85:0.35})`;
+    ctx.fillText((c.label||Q6_ARCHS[i%4]).slice(0,8),px,py+sz*0.58);
+  });
+  // corner label
+  ctx.fillStyle='rgba(79,195,247,0.18)'; ctx.font='8px monospace';
+  ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.fillText('Q6 · 64 CELLS',12,12);
+  ctx.restore();
+}
+
+// ─── INFOM API ────────────────────────────────────────────────────────────────
+let infomStatus = 'disconnected';
+let infomUrl    = 'http://localhost:8000';
+let infomGraph  = null;
+
+const ARCH_KEYWORDS = {
+  Бытие:    ['время','история','дата','период','past','time','era','history'],
+  Поток:    ['пространство','место','движение','путь','space','path','location'],
+  Познание: ['знание','смысл','понимание','концепция','mind','concept','knowledge'],
+  Структура:['форма','структура','граница','число','form','structure','network','graph'],
+};
+function detectArchetype(text){
+  const t=text.toLowerCase();
+  let best=null,bestN=0;
+  for(const [a,kws] of Object.entries(ARCH_KEYWORDS)){
+    const n=kws.reduce((s,k)=>s+(t.includes(k)?1:0),0);
+    if(n>bestN){bestN=n;best=a;}
+  }
+  return best||'Познание';
+}
+
+function setInfoMStatus(s){
+  infomStatus=s;
+  const colors={disconnected:'#445',connecting:'#ffd54f',connected:'#80cbc4',error:'#ff6b6b'};
+  const icons ={disconnected:'○',connecting:'◌',connected:'●',error:'✕'};
+  const dot=document.getElementById('infom-dot');
+  const lbl=document.getElementById('infom-label');
+  if(dot){dot.style.background=colors[s]||'#445';}
+  if(lbl){lbl.style.color=colors[s]||'#667';}
+}
+
+async function infomConnect(){
+  infomUrl=document.getElementById('infom-url').value.trim()||'http://localhost:8000';
+  setInfoMStatus('connecting');
+  try{
+    const r=await fetch(`${infomUrl}/`,{signal:AbortSignal.timeout(4000)});
+    const d=await r.json();
+    infomGraph=d.graph;
+    setInfoMStatus('connected');
+    const cnt=document.getElementById('infom-counts');
+    if(cnt) cnt.textContent=`${d.graph.nodes}n · ${d.graph.communities}c`;
+    renderInfoMStats(d.graph);
+    // Fetch communities from stats
+    try{
+      const sr=await fetch(`${infomUrl}/stats`);
+      const sd=await sr.json();
+      q6Communities=parseInfoMStats(sd.result||'');
+    }catch{}
+  }catch(e){
+    setInfoMStatus('error');
+    console.warn('infom connect failed',e);
+  }
+}
+
+function parseInfoMStats(text){
+  const comms=[];
+  text.split('\n').forEach(line=>{
+    const m=line.match(/\[([^\]]+)\]\s+(.+?)\s+\(Q6=(\S+),\s*nodes=(\d+)\)/);
+    if(m) comms.push({shape:m[1].trim(),label:m[2].trim(),hex_id:m[3],n_nodes:parseInt(m[4])});
+  });
+  return comms;
+}
+
+function renderInfoMStats(g){
+  const el=document.getElementById('infom-stats');
+  if(!el||!g) return;
+  el.innerHTML=`<div>Узлов <span>${g.nodes}</span></div>
+    <div>Рёбер <span>${g.edges}</span></div>
+    <div>Сообществ <span>${g.communities}</span></div>
+    <div>Modularity Q <span>${(g.modularity||0).toFixed(3)}</span></div>`;
+}
+
+async function infomIndexText(){
+  const text=document.getElementById('infom-index-text').value.trim();
+  if(!text||infomStatus!=='connected') return;
+  const msg=document.getElementById('infom-index-msg');
+  if(msg) msg.textContent='◌ индексирую...';
+  try{
+    await fetch(`${infomUrl}/index`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text,reset:false}),
+    });
+    await fetch(`${infomUrl}/build`,{method:'POST'});
+    const r=await fetch(`${infomUrl}/`);
+    const d=await r.json();
+    infomGraph=d.graph;
+    renderInfoMStats(d.graph);
+    document.getElementById('infom-index-text').value='';
+    if(msg) msg.textContent=`Готово. Узлов: ${d.graph.nodes}`;
+  }catch(e){
+    if(msg) msg.textContent=`Ошибка: ${e.message}`;
+  }
+}
+
+function toggleInfoMExpand(){
+  const el=document.getElementById('infom-expand');
+  const caret=document.getElementById('infom-caret');
+  if(!el) return;
+  const open=el.style.display==='block';
+  el.style.display=open?'none':'block';
+  if(caret) caret.textContent=open?'▼':'▲';
+}
+
+// ─── QUERY PANEL ─────────────────────────────────────────────────────────────
+let queryMode='hybrid';
+let queryOpen=false;
+let queryTypeTimer=null;
+
+function openQuery(){
+  queryOpen=true;
+  const ov=document.getElementById('query-overlay');
+  if(ov){ov.classList.add('open');document.getElementById('query-input').focus();}
+}
+function closeQuery(){
+  queryOpen=false;
+  const ov=document.getElementById('query-overlay');
+  if(ov) ov.classList.remove('open');
+}
+function queryOverlayClick(e){
+  if(e.target.id==='query-overlay') closeQuery();
+}
+function setQueryMode(m){
+  queryMode=m;
+  ['hybrid','local','global'].forEach(name=>{
+    const btn=document.getElementById(`qm-${name}`);
+    if(btn) btn.style.background=name===m?'rgba(79,195,247,0.3)':'rgba(79,195,247,0.15)';
+  });
+}
+function queryKeyDown(e){
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submitQuery();}
+}
+async function submitQuery(){
+  if(infomStatus!=='connected'){
+    showQueryAnswer('Сначала подключись к infom (кнопка INFOM справа вверху).','#ff6b6b',null);
+    return;
+  }
+  const text=document.getElementById('query-input').value.trim();
+  if(!text) return;
+  showQueryAnswer('◌ запрос...','#4fc3f7',null);
+  try{
+    const r=await fetch(`${infomUrl}/query`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({question:text,mode:queryMode}),
+    });
+    const d=await r.json();
+    const answer=d.result||'';
+    const arch=detectArchetype(text+' '+answer);
+    showQueryAnswer(answer,'#ccd',arch);
+    // Navigate agent to archetype node
+    navigateToArchetype(arch);
+  }catch(e){
+    showQueryAnswer(`Ошибка: ${e.message}`,'#ff6b6b',null);
+  }
+}
+function showQueryAnswer(text,color,arch){
+  const ansEl=document.getElementById('query-answer');
+  const textEl=document.getElementById('query-text');
+  const archEl=document.getElementById('query-archetype');
+  if(!ansEl||!textEl||!archEl) return;
+  ansEl.style.display='block';
+  textEl.style.color=color;
+  // Archetype badge
+  const archColors={Бытие:'#ff6b9d',Поток:'#4fc3f7',Познание:'#c792ea',Структура:'#80cbc4'};
+  if(arch){
+    archEl.style.display='inline-block';
+    archEl.style.background=`${archColors[arch]||'#4fc3f7'}18`;
+    archEl.style.border=`1px solid ${archColors[arch]||'#4fc3f7'}44`;
+    archEl.style.color=archColors[arch]||'#4fc3f7';
+    archEl.textContent=`● АРХЕТИП: ${arch}`;
+    activeArchId=arch;
+  } else {
+    archEl.style.display='none';
+  }
+  // Typewriter
+  clearInterval(queryTypeTimer);
+  let i=0; textEl.textContent='';
+  queryTypeTimer=setInterval(()=>{
+    if(i>=text.length){clearInterval(queryTypeTimer);return;}
+    textEl.textContent=text.slice(0,++i);
+  },10);
+}
+function navigateToArchetype(archName){
+  const nodeIdx=NODES.findIndex(n=>n.label===archName);
+  if(nodeIdx<0) return;
+  agents[0].plannedPath=bfsPath(agents[0].from,nodeIdx);
+  hyperFocus=nodeIdx;
+  document.getElementById('current-node').textContent=NODES[nodeIdx].label;
 }
 
 // ─── MAIN DRAW ───────────────────────────────────────────────────────────────

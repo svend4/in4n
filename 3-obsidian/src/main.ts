@@ -141,6 +141,16 @@ class AquariumView extends ItemView {
 
   // voronoi
   private voronoiMode = false;
+  private q6Mode      = false;
+
+  // infom API
+  private infomUrl    = 'http://localhost:8000';
+  private infomStatus = 'disconnected';
+  private infomGraph: Record<string,any> | null = null;
+  private infomCommunities: Array<{label:string;hex_id:string;n_nodes:number}> = [];
+  private activeArchetype: string | null = null;
+  private queryEl!: HTMLElement;
+  private infomStatusEl!: HTMLElement;
 
   // ui
   private targetIdx: number|null = null;
@@ -182,7 +192,43 @@ class AquariumView extends ItemView {
     hint.style.cssText = `
       position:absolute; bottom:10px; left:50%; transform:translateX(-50%); z-index:10;
       font-family:monospace; font-size:10px; opacity:0.22; pointer-events:none; color:#fff;`;
-    hint.textContent = 'Клик — цель · Перетащить — панорама · Колесо — зум · H — гиперболический режим';
+    hint.textContent = 'Клик цель · H гиперб. · V ворон. · Q Q6 · / запрос infom';
+
+    // InfoM status badge
+    this.infomStatusEl = containerEl.createEl('div');
+    this.infomStatusEl.style.cssText = `
+      position:absolute; bottom:34px; right:14px; z-index:10; pointer-events:none;
+      font-family:monospace; font-size:9px; letter-spacing:1px;
+      padding:2px 8px; border-radius:10px;
+      background:rgba(68,85,100,0.2); color:#445;
+      border:1px solid #33445533;`;
+    this.infomStatusEl.textContent = '○ infom';
+
+    // Query input (hidden until / pressed)
+    this.queryEl = containerEl.createEl('div');
+    this.queryEl.style.cssText = `
+      display:none; position:absolute; bottom:60px; left:50%; transform:translateX(-50%);
+      z-index:20; width:420px; background:rgba(7,7,20,0.96);
+      border:1px solid rgba(79,195,247,0.25); border-radius:12px;
+      padding:12px; font-family:monospace; pointer-events:all;
+      box-shadow:0 0 40px rgba(79,195,247,0.1);`;
+    this.queryEl.innerHTML = `
+      <div style="font-size:9px;opacity:.35;letter-spacing:2px;margin-bottom:8px">
+        INFOM GRAPHRAG · Enter отправить · Escape закрыть
+      </div>
+      <input id="aq-query-input" type="text" placeholder="Задай вопрос графу..."
+        style="width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(79,195,247,0.2);
+        border-radius:6px;color:#dde;font-family:monospace;font-size:12px;
+        padding:7px 10px;outline:none;box-sizing:border-box;" />
+      <div id="aq-query-answer" style="display:none;margin-top:8px;padding:8px;
+        background:rgba(255,255,255,0.02);border-radius:6px;font-size:11px;
+        line-height:1.6;color:#ccd;max-height:160px;overflow-y:auto;white-space:pre-wrap;"></div>
+    `;
+    const qi = this.queryEl.querySelector('#aq-query-input') as HTMLInputElement;
+    qi?.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter') { e.preventDefault(); this.submitQuery(); }
+      if (e.key === 'Escape') { this.closeQuery(); }
+    });
 
     this.canvas = containerEl.createEl('canvas');
     this.ctx    = this.canvas.getContext('2d')!;
@@ -333,6 +379,12 @@ class AquariumView extends ItemView {
         this.voronoiMode = !this.voronoiMode;
         this.modeEl.textContent = this.voronoiMode ? 'VORONOI' : (this.hyperMode ? 'HYPER · POINCARÉ' : 'NORMAL');
       }
+      if (e.key==='q'||e.key==='Q') {
+        this.q6Mode = !this.q6Mode;
+        this.modeEl.textContent = this.q6Mode ? 'Q6 HEX' : (this.voronoiMode ? 'VORONOI' : (this.hyperMode ? 'HYPER · POINCARÉ' : 'NORMAL'));
+      }
+      if (e.key==='/'){ e.preventDefault(); this.openQuery(); }
+      if (e.key==='Escape'){ this.closeQuery(); this.activeArchetype=null; }
       if (e.key==='h'||e.key==='H') {
         this.hyperMode = !this.hyperMode;
         this.modeEl.textContent    = this.hyperMode ? 'HYPER · POINCARÉ' : (this.voronoiMode ? 'VORONOI' : 'NORMAL');
@@ -442,6 +494,192 @@ class AquariumView extends ItemView {
     ).join('');
   }
 
+  // ── InfoM API ─────────────────────────────────────────────────────────────
+  async connectInfoM(url?: string) {
+    if (url) this.infomUrl = url;
+    this.setInfoMStatus('connecting');
+    try {
+      const r  = await fetch(`${this.infomUrl}/`);
+      const d  = await r.json();
+      this.infomGraph = d.graph;
+      this.setInfoMStatus('connected');
+      // fetch communities
+      try {
+        const sr = await fetch(`${this.infomUrl}/stats`);
+        const sd = await sr.json();
+        this.infomCommunities = this.parseInfoMStats(sd.result ?? '');
+      } catch { /* optional */ }
+    } catch {
+      this.setInfoMStatus('error');
+    }
+  }
+
+  private setInfoMStatus(s: string) {
+    this.infomStatus = s;
+    const icons: Record<string,string> = {
+      disconnected:'○', connecting:'◌', connected:'●', error:'✕' };
+    const colors: Record<string,string> = {
+      disconnected:'#445', connecting:'#ffd54f', connected:'#80cbc4', error:'#ff6b6b' };
+    if (this.infomStatusEl) {
+      this.infomStatusEl.textContent = `${icons[s]||'○'} infom`;
+      this.infomStatusEl.style.color = colors[s] || '#445';
+    }
+  }
+
+  private parseInfoMStats(text: string) {
+    const comms: Array<{label:string;hex_id:string;n_nodes:number}> = [];
+    text.split('\n').forEach(line => {
+      const m = line.match(/\[([^\]]+)\]\s+(.+?)\s+\(Q6=(\S+),\s*nodes=(\d+)\)/);
+      if (m) comms.push({ label: m[2].trim(), hex_id: m[3], n_nodes: parseInt(m[4]) });
+    });
+    return comms;
+  }
+
+  private openQuery() {
+    if (this.queryEl) {
+      this.queryEl.style.display = 'block';
+      const qi = this.queryEl.querySelector('#aq-query-input') as HTMLInputElement;
+      qi?.focus();
+    }
+  }
+
+  private closeQuery() {
+    if (this.queryEl) this.queryEl.style.display = 'none';
+  }
+
+  async submitQuery() {
+    const qi  = this.queryEl?.querySelector('#aq-query-input') as HTMLInputElement;
+    const ans = this.queryEl?.querySelector('#aq-query-answer') as HTMLElement;
+    const text = qi?.value?.trim() ?? '';
+    if (!text) return;
+    if (this.infomStatus !== 'connected') {
+      if (ans) { ans.style.display='block'; ans.textContent='Подключи infom: connectInfoM()'; }
+      return;
+    }
+    if (ans) { ans.style.display='block'; ans.textContent='◌ запрос...'; }
+    try {
+      const r  = await fetch(`${this.infomUrl}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: text, mode: 'hybrid' }),
+      });
+      const d = await r.json();
+      const result = d.result ?? '';
+      this.activeArchetype = this.detectArchetype(text + ' ' + result);
+      if (ans) {
+        ans.textContent = '';
+        // typewriter
+        let i = 0;
+        const timer = setInterval(() => {
+          if (i >= result.length) { clearInterval(timer); return; }
+          ans.textContent = result.slice(0, ++i);
+        }, 10);
+      }
+      // Navigate agent to archetype node
+      const idx = this.nodes.findIndex(n => n.label === this.activeArchetype);
+      if (idx >= 0) {
+        this.agents[0].plannedPath = bfs(this.adj, this.agents[0].from, idx);
+        this.hyperFocus = idx;
+        this.statusEl.textContent = '→ ' + this.nodes[idx].label;
+      }
+    } catch (e: any) {
+      if (ans) { ans.textContent = `Ошибка: ${e.message}`; }
+    }
+  }
+
+  private detectArchetype(text: string): string {
+    const t = text.toLowerCase();
+    const kws: Record<string, string[]> = {
+      Бытие:     ['время','история','дата','период'],
+      Поток:     ['пространство','движение','путь'],
+      Познание:  ['знание','смысл','понимание','концепция'],
+      Структура: ['форма','структура','граница','число'],
+    };
+    let best = 'Познание', bestN = 0;
+    for (const [a, keywords] of Object.entries(kws)) {
+      const n = keywords.reduce((s, k) => s + (t.includes(k) ? 1 : 0), 0);
+      if (n > bestN) { bestN = n; best = a; }
+    }
+    return best;
+  }
+
+  // ── Q6 hex grid draw ───────────────────────────────────────────────────────
+  private drawQ6Grid() {
+    if (!this.q6Mode) return;
+    const ctx = this.ctx;
+    const W = this.canvas.width, H = this.canvas.height;
+    const sz  = Math.min(W, H) * 0.038;
+    const ox  = W / 2, oy = H / 2;
+    const t   = this.frame * 0.02;
+
+    const hexToXY = (q: number, r: number) => ({
+      x: sz * Math.sqrt(3) * (q + r / 2),
+      y: sz * (3 / 2) * r,
+    });
+    const hexCorners6 = (cx: number, cy: number) =>
+      Array.from({ length: 6 }, (_, i) => {
+        const a = Math.PI / 3 * i + Math.PI / 6;
+        return [cx + sz * 0.91 * Math.cos(a), cy + sz * 0.91 * Math.sin(a)] as [number, number];
+      });
+    const hexIdToAxial = (id: number) => ({ q: id % 8 - 3.5, r: Math.floor(id / 8) - 3.5 });
+    const parseHexId  = (s: string) => {
+      const m = s.match(/(\d+)$/); return m ? parseInt(m[1]) % 64 : null;
+    };
+    const Q6_COLORS: [number,number,number][] = [
+      [255,107,157],[79,195,247],[199,146,234],[128,203,196]];
+    const Q6_ARCHS = ['Бытие','Поток','Познание','Структура'];
+    const shapeSymbol = (n: number) => (n >= 9 ? '∿' : ({3:'△',4:'□',5:'⬠',6:'⬡',7:'☆',8:'✳'}[n] ?? '◆'));
+
+    // background grid
+    for (let id = 0; id < 64; id++) {
+      const {q, r} = hexIdToAxial(id);
+      const {x, y} = hexToXY(q, r);
+      const corners = hexCorners6(ox + x, oy + y);
+      ctx.beginPath(); ctx.moveTo(...corners[0]);
+      corners.slice(1).forEach(c => ctx.lineTo(...c)); ctx.closePath();
+      ctx.strokeStyle = 'rgba(79,195,247,0.05)'; ctx.lineWidth = 0.5; ctx.stroke();
+    }
+
+    // communities
+    const communities = this.infomCommunities.length ? this.infomCommunities :
+      [{label:'Бытие',hex_id:'hex_18',n_nodes:6},{label:'Поток',hex_id:'hex_21',n_nodes:6},
+       {label:'Познание',hex_id:'hex_42',n_nodes:6},{label:'Структура',hex_id:'hex_45',n_nodes:6}];
+
+    communities.forEach((c, i) => {
+      const hexId = parseHexId(c.hex_id ?? `hex_${[18,21,42,45][i%4]}`);
+      if (hexId === null) return;
+      const {q, r}     = hexIdToAxial(hexId);
+      const {x, y}     = hexToXY(q, r);
+      const px = ox + x, py = oy + y;
+      const [cr, cg, cb] = Q6_COLORS[i % 4];
+      const isActive   = this.activeArchetype === Q6_ARCHS[i % 4];
+      const pulse      = isActive ? 0.26 + 0.12 * Math.sin(t * 3) : 0.07 + 0.02 * Math.sin(t + i * 0.8);
+      const corners    = hexCorners6(px, py);
+
+      ctx.beginPath(); ctx.moveTo(...corners[0]);
+      corners.slice(1).forEach(c2 => ctx.lineTo(...c2)); ctx.closePath();
+      ctx.fillStyle   = `rgba(${cr},${cg},${cb},${pulse})`; ctx.fill();
+      ctx.strokeStyle = isActive ? `rgba(${cr},${cg},${cb},0.75)` : `rgba(${cr},${cg},${cb},0.28)`;
+      ctx.lineWidth   = isActive ? 2 : 0.8;
+      if (isActive) { ctx.save(); ctx.shadowColor=`rgb(${cr},${cg},${cb})`; ctx.shadowBlur=16; }
+      ctx.stroke();
+      if (isActive) ctx.restore();
+
+      const sym = shapeSymbol(c.n_nodes);
+      ctx.fillStyle   = `rgba(${cr},${cg},${cb},${isActive ? 0.95 : 0.55})`;
+      ctx.font        = `${sz * 0.5}px serif`;
+      ctx.textAlign   = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(sym, px, py);
+      ctx.font        = `${Math.max(7, sz * 0.27)}px monospace`;
+      ctx.fillStyle   = `rgba(${cr},${cg},${cb},${isActive ? 0.85 : 0.35})`;
+      ctx.fillText((c.label || Q6_ARCHS[i % 4]).slice(0, 8), px, py + sz * 0.58);
+    });
+
+    ctx.fillStyle = 'rgba(79,195,247,0.18)'; ctx.font = '8px monospace';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText('Q6 · 64 CELLS', 12, 12);
+  }
+
   // ── Draw ──────────────────────────────────────────────────────────────────
   private draw() {
     if (this.hyperMode) this.drawHyper();
@@ -510,6 +748,8 @@ class AquariumView extends ItemView {
 
     // Agents: trails + bodies
     this.agents.forEach(ag => this.drawAgent(ag, this.nodes));
+
+    this.drawQ6Grid();
 
     // Nodes
     this.nodes.forEach((n,i) => {
@@ -665,6 +905,7 @@ class AquariumView extends ItemView {
     });
 
     ctx.restore(); // end clip
+    this.drawQ6Grid();
   }
 }
 
