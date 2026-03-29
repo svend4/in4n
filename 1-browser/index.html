@@ -80,20 +80,27 @@
 'use strict';
 // ─── DATA ────────────────────────────────────────────────────────────────────
 const NODES = [
-  { id:0,  label:'Время',         cat:0 },
-  { id:1,  label:'Пространство',  cat:1 },
-  { id:2,  label:'Движение',      cat:1 },
-  { id:3,  label:'Память',        cat:2 },
-  { id:4,  label:'Смысл',         cat:2 },
-  { id:5,  label:'Форма',         cat:3 },
-  { id:6,  label:'Связь',         cat:3 },
-  { id:7,  label:'Поиск',         cat:0 },
-  { id:8,  label:'Знание',        cat:2 },
-  { id:9,  label:'Вопрос',        cat:0 },
-  { id:10, label:'Граница',       cat:3 },
-  { id:11, label:'Путь',          cat:1 },
+  // level 2 — strategies
+  { id:0,  label:'Время',         cat:0, level:2 },
+  { id:1,  label:'Пространство',  cat:1, level:2 },
+  { id:2,  label:'Движение',      cat:1, level:1 },
+  { id:3,  label:'Память',        cat:2, level:1 },
+  { id:4,  label:'Смысл',         cat:2, level:2 },
+  { id:5,  label:'Форма',         cat:3, level:2 },
+  { id:6,  label:'Связь',         cat:3, level:1 },
+  { id:7,  label:'Поиск',         cat:0, level:1 },
+  { id:8,  label:'Знание',        cat:2, level:1 },
+  { id:9,  label:'Вопрос',        cat:0, level:1 },
+  { id:10, label:'Граница',       cat:3, level:1 },
+  { id:11, label:'Путь',          cat:1, level:1 },
+  // level 3 — archetypes (cluster attractors)
+  { id:12, label:'Бытие',         cat:0, level:3 },
+  { id:13, label:'Поток',         cat:1, level:3 },
+  { id:14, label:'Познание',      cat:2, level:3 },
+  { id:15, label:'Структура',     cat:3, level:3 },
 ];
 const EDGES = [
+  // original graph
   [0,1],[0,2],[0,3],[0,7],[0,9],
   [1,2],[1,5],[1,10],[1,11],
   [2,4],[2,6],[2,11],
@@ -102,8 +109,18 @@ const EDGES = [
   [5,6],[5,10],
   [6,7],[6,8],[6,11],
   [7,9],[8,9],[9,10],[10,11],[3,11],[0,8],
+  // archetype → cluster
+  [12,0],[12,7],[12,9],
+  [13,1],[13,2],[13,11],
+  [14,4],[14,3],[14,8],
+  [15,5],[15,6],[15,10],
+  // archetype ring
+  [12,13],[13,14],[14,15],[15,12],
 ];
 const CAT_HUE = [300, 200, 140, 30];
+// level → base node radius
+function nodeLevel(i){ return NODES[i]?.level ?? 1; }
+function levelNodeR(i){ const lv=nodeLevel(i); return lv===3?30:lv===2?18:12; }
 const adj = Array.from({length:NODES.length}, ()=>[]);
 EDGES.forEach(([a,b])=>{ adj[a].push(b); adj[b].push(a); });
 
@@ -130,9 +147,26 @@ function physicsStep(){
   }
   EDGES.forEach(([a,b])=>{
     const dx=state[b].x-state[a].x, dy=state[b].y-state[a].y;
-    const d=Math.sqrt(dx*dx+dy*dy)||1, s=(d-160)*0.04;
+    const d=Math.sqrt(dx*dx+dy*dy)||1;
+    // archetype edges use shorter rest length (cluster tighter)
+    const rest = (nodeLevel(a)===3||nodeLevel(b)===3) ? 110 : 160;
+    const s=(d-rest)*0.04;
     const fx=s*dx/d, fy=s*dy/d;
     state[a].vx+=fx; state[a].vy+=fy; state[b].vx-=fx; state[b].vy-=fy;
+  });
+  // Cluster force: each archetype gently pulls same-cat nodes toward it
+  NODES.forEach((n,i)=>{
+    if(n.level!==3) return;
+    NODES.forEach((m,j)=>{
+      if(m.cat!==n.cat || i===j) return;
+      const dx=state[i].x-state[j].x, dy=state[i].y-state[j].y;
+      const d=Math.sqrt(dx*dx+dy*dy)||1;
+      const target = m.level===2 ? 120 : 190;
+      const s=(d-target)*0.012;
+      const fx=s*dx/d, fy=s*dy/d;
+      state[j].vx+=fx; state[j].vy+=fy;
+      state[i].vx-=fx*0.08; state[i].vy-=fy*0.08;
+    });
   });
   for(let i=0;i<n;i++){
     state[i].vx=(state[i].vx-state[i].x*0.003)*0.88;
@@ -165,10 +199,11 @@ const AGENT_DEFS = [
   { color:'#ffd54f', name:'Δelta',   speed:0.010 },
 ];
 
+const DETAIL_COUNT = 12; // non-archetype nodes for initial agent spawn
 const agents = AGENT_DEFS.map((def,i)=>({
   ...def,
-  from: (i*3) % NODES.length,
-  to:   adj[(i*3)%NODES.length][0],
+  from: (i*3) % DETAIL_COUNT,
+  to:   adj[(i*3)%DETAIL_COUNT][0],
   t:    Math.random(),
   trail:[],
   pheromones: new Float32Array(EDGES.length).fill(0.03),
@@ -314,7 +349,7 @@ function drawCrossword(positions){
 let editMode      = false;
 let editSelected  = null;   // node index selected as edge source
 let editMouseWorld= {x:0,y:0};
-let nodeIdCounter = NODES.length;
+let nodeIdCounter = 16;
 
 function editorAddNode(wx,wy){
   const id=nodeIdCounter++;
@@ -630,33 +665,52 @@ function drawEdges(positions){
 function drawNodes(positions, nodeR){
   NODES.forEach((n,i)=>{
     const pos=positions[i];
+    if(!pos) return;
     const isTarget  = gameMode && gameTarget===i;
-    const r = nodeR ? nodeR(i, pos) : 18;
+    const isArchetype = n.level===3;
+    // base radius from level or hyper callback
+    const baseR = nodeR ? nodeR(i, pos) : levelNodeR(i);
+    const r = isArchetype ? baseR*(1+0.06*Math.sin(frame*0.04+i)) : baseR;
     const hue=CAT_HUE[n.cat];
 
-    const glowR=r*(isTarget?3.2:1.6);
+    // outer glow
+    const glowR=r*(isTarget?3.5:isArchetype?2.8:1.6);
     const grd=ctx.createRadialGradient(pos.x,pos.y,0,pos.x,pos.y,glowR);
-    grd.addColorStop(0,`hsla(${hue},75%,60%,${isTarget?0.7:0.35})`);
+    grd.addColorStop(0,`hsla(${hue},75%,60%,${isArchetype?0.5:isTarget?0.7:0.30})`);
     grd.addColorStop(1,`hsla(${hue},60%,40%,0)`);
     ctx.beginPath(); ctx.arc(pos.x,pos.y,glowR,0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
 
     ctx.save();
-    ctx.shadowColor=`hsl(${hue},80%,70%)`; ctx.shadowBlur=isTarget?28:10;
+    ctx.shadowColor=`hsl(${hue},80%,70%)`; ctx.shadowBlur=isArchetype?30:isTarget?28:10;
     ctx.beginPath(); ctx.arc(pos.x,pos.y,r,0,Math.PI*2);
-    ctx.fillStyle=`hsla(${hue},70%,40%,0.85)`; ctx.fill();
+    ctx.fillStyle=`hsla(${hue},${isArchetype?80:70}%,${isArchetype?38:40}%,0.92)`; ctx.fill();
+
+    // archetype: double pulsing ring
+    if(isArchetype){
+      const ring1=r+5+3*Math.sin(frame*0.05+i);
+      const ring2=r+12+5*Math.sin(frame*0.03+i*1.3);
+      ctx.strokeStyle=`hsla(${hue},90%,75%,0.65)`; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.arc(pos.x,pos.y,ring1,0,Math.PI*2); ctx.stroke();
+      ctx.strokeStyle=`hsla(${hue},70%,60%,0.25)`; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.arc(pos.x,pos.y,ring2,0,Math.PI*2); ctx.stroke();
+    }
     if(isTarget){
-      // pulsing ring for target
       const pr=r+4+3*Math.sin(frame*0.1);
       ctx.beginPath(); ctx.arc(pos.x,pos.y,pr,0,Math.PI*2);
       ctx.strokeStyle=`hsl(${hue},90%,80%)`; ctx.lineWidth=2; ctx.stroke();
     }
     ctx.restore();
 
-    const fontSize=nodeR ? Math.max(8,r*0.7)|0 : 11;
-    if(r>7){
-      ctx.fillStyle=`hsla(${hue},60%,88%,${Math.min(1,r/14)})`;
-      ctx.font=`${fontSize}px monospace`; ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.fillText(n.label, pos.x, pos.y+r+fontSize);
+    // label: archetypes always visible + larger; others fade in
+    const fontSize = isArchetype
+      ? Math.max(13, r*0.6)|0
+      : (nodeR ? Math.max(7,r*0.7)|0 : 11);
+    if(isArchetype || r>7){
+      const alpha = isArchetype ? 1 : Math.min(1,r/14);
+      ctx.fillStyle=`hsla(${hue},${isArchetype?90:60}%,${isArchetype?95:88}%,${alpha})`;
+      ctx.font=`${isArchetype?'bold ':''}${fontSize}px monospace`;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(n.label, pos.x, pos.y+r+fontSize+2);
     }
   });
 }
@@ -705,7 +759,7 @@ function drawNormal(){
   if(crosswordMode) drawCrossword(state);
   else              drawEdges(state);
   agents.forEach(ag=>drawAgent(ag,state,null));
-  drawNodes(state, null);
+  drawNodes(state, levelNodeR);
   if(editMode) drawEditOverlay(state);
   ctx.restore();
 }
@@ -757,7 +811,7 @@ function drawHyper(){
     ctx.restore();
   });
 
-  drawNodes(screen, (i,pos)=>hyperNodeR(disk[i].x,disk[i].y));
+  drawNodes(screen, (i,pos)=>hyperNodeR(disk[i].x,disk[i].y) * (levelNodeR(i)/12));
   if(editMode) drawEditOverlay(screen);
   ctx.restore();
 }

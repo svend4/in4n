@@ -18,6 +18,8 @@ interface NodeState {
   id: string; label: string;
   x: number; y: number; vx: number; vy: number;
   links: number;
+  level?: number;   // 1=detail 2=strategy 3=archetype
+  cat?:   number;   // category index for cluster force
 }
 
 // ─── Physics ─────────────────────────────────────────────────────────────────
@@ -36,10 +38,25 @@ function physicsStep(nodes: NodeState[], edges: [number, number][]): void {
   edges.forEach(([a,b]) => {
     const dx = nodes[b].x-nodes[a].x, dy = nodes[b].y-nodes[a].y;
     const d  = Math.sqrt(dx*dx+dy*dy)||1;
-    const s  = (d-SPRING_LEN)*SPRING_K;
+    const rest = (nodes[a].level===3||nodes[b].level===3) ? 100 : SPRING_LEN;
+    const s  = (d-rest)*SPRING_K;
     const fx = s*dx/d, fy = s*dy/d;
     nodes[a].vx += fx; nodes[a].vy += fy;
     nodes[b].vx -= fx; nodes[b].vy -= fy;
+  });
+  // Cluster force: archetypes pull same-cat nodes
+  nodes.forEach((n,i) => {
+    if (n.level !== 3 || n.cat === undefined) return;
+    nodes.forEach((m,j) => {
+      if (m.cat !== n.cat || i===j) return;
+      const dx = nodes[i].x-nodes[j].x, dy = nodes[i].y-nodes[j].y;
+      const d  = Math.sqrt(dx*dx+dy*dy)||1;
+      const target = m.level===2 ? 110 : 180;
+      const s  = (d-target)*0.012;
+      const fx = s*dx/d, fy = s*dy/d;
+      nodes[j].vx += fx; nodes[j].vy += fy;
+      nodes[i].vx -= fx*0.08; nodes[i].vy -= fy*0.08;
+    });
   });
   for (let i = 0; i < n; i++) {
     nodes[i].vx = (nodes[i].vx - nodes[i].x*CENTER)*DAMPING;
@@ -232,15 +249,43 @@ class AquariumView extends ItemView {
   }
 
   private loadDemo() {
-    const labels = ['Время','Пространство','Движение','Память','Смысл','Форма','Связь','Поиск','Знание','Вопрос','Граница','Путь'];
-    this.nodes = labels.map((label,i) => {
-      const a = (i/labels.length)*Math.PI*2;
-      return { id:label, label, x:Math.cos(a)*180, y:Math.sin(a)*180, vx:0,vy:0, links:0 };
+    // level 2 strategies (0–11) + level 3 archetypes (12–15)
+    const defs: { label:string; level:number; cat:number }[] = [
+      { label:'Время',        level:2, cat:0 },
+      { label:'Пространство', level:2, cat:1 },
+      { label:'Движение',     level:1, cat:1 },
+      { label:'Память',       level:1, cat:2 },
+      { label:'Смысл',        level:2, cat:2 },
+      { label:'Форма',        level:2, cat:3 },
+      { label:'Связь',        level:1, cat:3 },
+      { label:'Поиск',        level:1, cat:0 },
+      { label:'Знание',       level:1, cat:2 },
+      { label:'Вопрос',       level:1, cat:0 },
+      { label:'Граница',      level:1, cat:3 },
+      { label:'Путь',         level:1, cat:1 },
+      { label:'Бытие',        level:3, cat:0 },
+      { label:'Поток',        level:3, cat:1 },
+      { label:'Познание',     level:3, cat:2 },
+      { label:'Структура',    level:3, cat:3 },
+    ];
+    this.nodes = defs.map((d,i) => {
+      const a = (i/defs.length)*Math.PI*2;
+      const r = d.level===3 ? 280 : 180;
+      return { id:d.label, label:d.label, x:Math.cos(a)*r, y:Math.sin(a)*r,
+               vx:0, vy:0, links:0, level:d.level, cat:d.cat };
     });
     const raw: [number,number][] = [
+      // original
       [0,1],[0,2],[0,3],[0,7],[0,9],[1,2],[1,5],[1,10],[1,11],
       [2,4],[2,6],[2,11],[3,4],[3,8],[3,9],[4,5],[4,7],[4,8],
       [5,6],[5,10],[6,7],[6,8],[6,11],[7,9],[8,9],[9,10],[10,11],
+      // archetype → cluster
+      [12,0],[12,7],[12,9],
+      [13,1],[13,2],[13,11],
+      [14,4],[14,3],[14,8],
+      [15,5],[15,6],[15,10],
+      // archetype ring
+      [12,13],[13,14],[14,15],[15,12],
     ];
     this.edges = raw;
     this.adj   = new Map(this.nodes.map((_,i)=>[i,[]]));
@@ -468,19 +513,31 @@ class AquariumView extends ItemView {
 
     // Nodes
     this.nodes.forEach((n,i) => {
-      const isTarget  = this.targetIdx===i;
-      const isCurrent = this.agents[0].from===i;
-      const r = Math.max(10, 10+n.links*1.5);
-      const color = isCurrent ? '#ffd54f' : isTarget ? '#c792ea' : '#4fc3f7';
-      const grd=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,r*2.2);
-      grd.addColorStop(0,color+'aa'); grd.addColorStop(1,color+'00');
-      ctx.beginPath(); ctx.arc(n.x,n.y,r*2.2,0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
-      ctx.save(); ctx.shadowColor=color; ctx.shadowBlur=isTarget?22:10;
+      const isTarget   = this.targetIdx===i;
+      const isCurrent  = this.agents[0].from===i;
+      const isArchetype = n.level===3;
+      const baseR = Math.max(10, 10+n.links*1.5);
+      const r = isArchetype ? baseR*1.7*(1+0.05*Math.sin(this.frame*0.04+i)) : baseR;
+      const color = isCurrent ? '#ffd54f' : isTarget ? '#c792ea' : isArchetype ? '#ffe082' : '#4fc3f7';
+      const glowR = r*(isArchetype ? 2.8 : 2.2);
+      const grd=ctx.createRadialGradient(n.x,n.y,0,n.x,n.y,glowR);
+      grd.addColorStop(0,color+(isArchetype?'88':'aa')); grd.addColorStop(1,color+'00');
+      ctx.beginPath(); ctx.arc(n.x,n.y,glowR,0,Math.PI*2); ctx.fillStyle=grd; ctx.fill();
+      ctx.save();
+      ctx.shadowColor=color; ctx.shadowBlur=isArchetype?30:isTarget?22:10;
       ctx.beginPath(); ctx.arc(n.x,n.y,r,0,Math.PI*2); ctx.fillStyle=color+'cc'; ctx.fill();
+      if (isArchetype) {
+        const ring1=r+5+3*Math.sin(this.frame*0.05+i);
+        ctx.strokeStyle=color+'aa'; ctx.lineWidth=1.5;
+        ctx.beginPath(); ctx.arc(n.x,n.y,ring1,0,Math.PI*2); ctx.stroke();
+        const ring2=r+12+4*Math.sin(this.frame*0.03+i*1.4);
+        ctx.strokeStyle=color+'44'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.arc(n.x,n.y,ring2,0,Math.PI*2); ctx.stroke();
+      }
       ctx.restore();
-      ctx.fillStyle='rgba(220,235,255,0.82)';
-      ctx.font=`${isCurrent?'bold ':''}10px monospace`;
-      ctx.textAlign='center'; ctx.fillText(n.label,n.x,n.y+r+11);
+      ctx.fillStyle= isArchetype ? 'rgba(255,240,180,0.95)' : 'rgba(220,235,255,0.82)';
+      ctx.font=`${isArchetype||isCurrent?'bold ':''}${isArchetype?12:10}px monospace`;
+      ctx.textAlign='center'; ctx.fillText(n.label,n.x,n.y+r+(isArchetype?14:11));
     });
     ctx.restore();
   }

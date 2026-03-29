@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { ForceGraph3D } from 'react-force-graph';
 import * as THREE from 'three';
-import { GRAPH_DATA, GROUP_COLORS, TIME_ERAS } from './data.js';
+import { GRAPH_DATA, GROUP_COLORS, TIME_ERAS, ARCHETYPES } from './data.js';
 import InfoPanel from './components/InfoPanel.jsx';
 import TerrainOverlay from './components/TerrainOverlay.jsx';
 import SemanticZoom from './components/SemanticZoom.jsx';
@@ -37,6 +37,10 @@ const NODE_DETAILS = new Map(GRAPH_DATA.nodes.map(n => [n.id, {
     'Слово':        'Единица языка и смысла',
     'Образ':        'Визуальное представление',
     'Число':        'Абстрактная величина',
+    'Бытие':        'Архетип времени — первичное существование',
+    'Поток':        'Архетип пространства — непрерывное движение',
+    'Познание':     'Архетип разума — акт понимания',
+    'Структура':    'Архетип формы — принцип организации',
   }[n.id] || '',
 }]));
 
@@ -85,11 +89,12 @@ export default function App() {
   }, []);
 
   // Multiple agents (index 0 = primary/player)
+  const detailNodes = GRAPH_DATA.nodes.filter(n => n.level < 3);
   const agentsRef = useRef(
     AGENT_COLORS.map((color, i) => ({
       color,
-      from:  GRAPH_DATA.nodes[(i * 3) % GRAPH_DATA.nodes.length].id,
-      to:    GRAPH_DATA.nodes[(i * 3 + 1) % GRAPH_DATA.nodes.length].id,
+      from:  detailNodes[(i * 3) % detailNodes.length].id,
+      to:    detailNodes[(i * 3 + 1) % detailNodes.length].id,
       t:     Math.random(),
       plannedPath: [],
       score: 0,
@@ -130,33 +135,55 @@ export default function App() {
 
   // ── Custom node: transparent sphere + wireframe + height-based glow ──
   const nodeThreeObject = useCallback(node => {
-    const grp    = new THREE.Group();
-    const col    = GROUP_COLORS[node.group] || '#ffffff';
-    const relief = (LINK_COUNTS[node.id] || 0) * 8;
+    const grp       = new THREE.Group();
+    const col       = GROUP_COLORS[node.group] || '#ffffff';
+    const relief    = (LINK_COUNTS[node.id] || 0) * 8;
+    const isArch    = node.level === 3;
+    const isStrat   = node.level === 2;
 
-    // Core sphere — size scales slightly with relief
-    const r = node.val * 0.6 + relief * 0.05;
+    // Core sphere — larger for archetypes
+    const baseR = node.val * 0.6 + relief * 0.05;
+    const r     = isArch ? baseR * 1.55 : isStrat ? baseR * 1.15 : baseR;
     grp.add(new THREE.Mesh(
-      new THREE.SphereGeometry(r, 20, 20),
+      new THREE.SphereGeometry(r, isArch ? 28 : 20, isArch ? 28 : 20),
       new THREE.MeshPhongMaterial({
-        color: col, emissive: col, emissiveIntensity: 0.35,
-        transparent: true, opacity: 0.72,
+        color: col, emissive: col,
+        emissiveIntensity: isArch ? 0.7 : 0.35,
+        transparent: true, opacity: isArch ? 0.85 : 0.72,
       })
     ));
 
     // Wireframe shell
     grp.add(new THREE.Mesh(
       new THREE.SphereGeometry(r * 1.08, 8, 8),
-      new THREE.MeshBasicMaterial({ color: col, wireframe: true, transparent: true, opacity: 0.12 })
+      new THREE.MeshBasicMaterial({ color: col, wireframe: true, transparent: true,
+        opacity: isArch ? 0.25 : 0.12 })
     ));
 
-    // Vertical "mountain pillar" — a thin cylinder from z=0 to node's relief height
+    // Archetype: outer halo ring (torus)
+    if (isArch) {
+      const torus = new THREE.Mesh(
+        new THREE.TorusGeometry(r * 1.8, 0.6, 8, 32),
+        new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.35 })
+      );
+      torus.rotation.x = Math.PI / 2;
+      grp.add(torus);
+      // second larger ring
+      const torus2 = new THREE.Mesh(
+        new THREE.TorusGeometry(r * 2.6, 0.3, 6, 32),
+        new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.15 })
+      );
+      torus2.rotation.x = Math.PI / 3;
+      grp.add(torus2);
+    }
+
+    // Vertical "mountain pillar"
     if (relief > 0) {
       const pillar = new THREE.Mesh(
         new THREE.CylinderGeometry(0.8, 1.5, relief, 6),
         new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.18 })
       );
-      pillar.position.set(0, 0, -relief / 2); // hang below the node
+      pillar.position.set(0, 0, -relief / 2);
       grp.add(pillar);
     }
 
